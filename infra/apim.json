@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "resources": [
+    {
+      "type": "Microsoft.ApiManagement/service",
+      "apiVersion": "2024-05-01",
+      "name": "apim-copilot-poc",
+      "location": "eastus2",
+      "sku": { "name": "BasicV2", "capacity": 1 },
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "publisherEmail": "publisher@example.com",
+        "publisherName": "Copilot PoC"
+      }
+    }
+  ],
+  "outputs": {
+    "principalId": {
+      "type": "string",
+      "value": "[reference('apim-copilot-poc', '2024-05-01', 'Full').identity.principalId]"
+    },
+    "gatewayUrl": {
+      "type": "string",
+      "value": "[reference('apim-copilot-poc', '2024-05-01').gatewayUrl]"
+    }
+  }
+}

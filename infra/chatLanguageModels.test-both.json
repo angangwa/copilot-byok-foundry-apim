@@ -1,0 +1,45 @@
+[
+  {
+    "name": "Foundry-via-APIM (chat + responses)",
+    "vendor": "azure",
+    "models": [
+      {
+        "id": "gpt-4.1",
+        "name": "gpt-4.1 · chat",
+        "url": "https://apim-copilot-poc.azure-api.net/foundry/openai/v1/chat/completions",
+        "toolCalling": true,
+        "vision": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16000
+      },
+      {
+        "id": "model-router",
+        "name": "model-router · chat",
+        "url": "https://apim-copilot-poc.azure-api.net/foundry/openai/v1/chat/completions",
+        "toolCalling": true,
+        "vision": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16000
+      },
+      {
+        "id": "gpt-4.1",
+        "name": "gpt-4.1 · responses (NOT for VS Code azure vendor — CLI/SDK only)",
+        "apiType": "responses",
+        "url": "https://apim-copilot-poc.azure-api.net/foundry/openai/v1/responses",
+        "toolCalling": false,
+        "vision": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16000
+      },
+      {
+        "id": "model-router",
+        "name": "model-router · responses (NOT for VS Code azure vendor — CLI/SDK only)",
+        "url": "https://apim-copilot-poc.azure-api.net/foundry/openai/v1/responses",
+        "toolCalling": false,
+        "vision": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16000
+      }
+    ]
+  }
+]

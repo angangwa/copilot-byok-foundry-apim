@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Foundry-via-APIM",
+    "vendor": "azure",
+    "models": [
+      {
+        "id": "gpt-4.1",
+        "name": "gpt-4.1 (governed)",
+        "url": "https://apim-copilot-poc.azure-api.net/foundry/openai/v1/chat/completions",
+        "toolCalling": true,
+        "vision": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16000
+      },
+      {
+        "id": "model-router",
+        "name": "model-router (governed)",
+        "url": "https://apim-copilot-poc.azure-api.net/foundry/openai/v1/chat/completions",
+        "toolCalling": true,
+        "vision": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16000
+      }
+    ]
+  }
+]

@@ -1,0 +1,18 @@
+# Local environment-specific values & secrets — NEVER commit these
+config.env
+user-details.md
+
+# Tokens / credentials that might be dropped while testing
+*.tok
+*.token
+*.pem
+*.key
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Starting-point design notes — keep local
+plan.md

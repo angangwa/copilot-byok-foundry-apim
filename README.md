@@ -133,6 +133,14 @@ bash infra-passthrough/deploy.sh          # Option B  → apim-copilot-poc-pt  (
 > `config.env` (your real IDs) is **git-ignored** — never committed. The scripts read it
 > automatically; resource names are non-secret defaults you can override there.
 
+**Tear it down** (each option deletes its own resource group and purges the soft-deleted
+Cognitive Services + APIM so their names free up; the shared group/test user are left intact):
+
+```bash
+bash infra-passthrough/cleanup.sh         # Option B  (the pricier one: Standard v2 + private endpoint)
+bash infra/cleanup.sh                     # Option A
+```
+
 Both reuse the same `copilot-users` group and `copilotuser` test user, so you can stand them up
 side-by-side, validate with `bash <folder>/test-gateway.sh` (device-code sign-in), and point VS Code
 Copilot at either gateway via the folder's `chatLanguageModels.snippet.json`.

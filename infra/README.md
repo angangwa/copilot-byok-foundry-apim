@@ -184,6 +184,9 @@ bash infra/deploy.sh  # ~5–10 min (APIM provisioning dominates)
 Insights → APIM (Basic v2 + managed identity) → grants the MI access to Foundry (RBAC) and Graph
 (group read) → defines the API with no subscription key → wires App Insights → applies the policy.
 
+**Tear it down:** `bash infra/cleanup.sh` (deletes the RG + purges the soft-deleted Foundry/APIM;
+add `-y` to skip the confirmation prompt).
+
 ---
 
 ## Use it from VS Code Copilot

@@ -150,6 +150,12 @@ az login              # subscription Owner (assigns the group RBAC role + create
 bash infra-passthrough/deploy.sh   # ~10-15 min (APIM Std v2 provisioning + VNet integration dominate)
 ```
 
+**Tear it down** (this option costs the most — Standard v2 APIM + private endpoint):
+
+```bash
+bash infra-passthrough/cleanup.sh  # deletes the RG + purges soft-deleted Foundry/APIM; -y to skip the prompt
+```
+
 `deploy.sh` builds, in order: RG → VNet + `snet-apim` (delegated) + `snet-pe` + NSGs → Foundry +
 `gpt-4.1`/`model-router`/`gpt-5-mini` → private endpoint + 3 private DNS zones + **disable public
 access** → App Insights → APIM Standard v2 + **outbound VNet integration** → **grant the group

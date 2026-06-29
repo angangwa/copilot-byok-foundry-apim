@@ -8,6 +8,10 @@ user-details.md
 *.pem
 *.key
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Editor / OS noise
 .DS_Store
 .idea/

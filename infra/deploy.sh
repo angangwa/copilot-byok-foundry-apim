@@ -248,6 +248,38 @@ python3 -c "import json;json.dump({'properties':{'loggerId':'$LOGGERID','alwaysL
 az rest --method PUT --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC/apis/foundry/diagnostics/applicationinsights?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body @"$TMP/diag.json" -o none
 
+# 9c. ROUTED-MODEL LOGGING (GatewayLlmLogs) — capture which model model-router actually served.
+#    ------------------------------------------------------------------------
+#    The token METRIC above (llm-emit-token-metric, step 10/(3)) runs INBOUND, so its
+#    `model` dimension is always the REQUESTED name. For model-router that is literally
+#    "model-router" — it CAN'T see which underlying model actually served the request
+#    (that's only in the response). To record the SERVED model, turn on the gateway's
+#    generative-AI logs: a Log Analytics workspace + a resource diagnostic that routes the
+#    GatewayLlmLogs category there. The resource-specific table ApiManagementGatewayLlmLog
+#    then carries DeploymentName (= model-router) next to ModelName (= e.g. gpt-5-nano-...),
+#    which the FinOps "Live routing" widget reads (see finops/README.md).
+#    OPTIONAL: the per-developer dashboard runs purely on the App Insights token metric
+#    above; only the routed-model view needs these logs.
+APIM_RES="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC"
+az monitor log-analytics workspace create -g "$RG" -n law-copilot-poc -l "$LOC" -o none
+LAW_ID=$(az monitor log-analytics workspace show -g "$RG" -n law-copilot-poc --query id -o tsv)
+#    --export-to-resource-specific true is REQUIRED. Without it the data lands in the legacy
+#    AzureDiagnostics table (as deploymentName_s / modelName_s columns) instead of the
+#    ApiManagementGatewayLlmLog table, and the dashboard widget stays empty. First rows
+#    appear ~15 min after enabling (a brand-new workspace can take up to ~2h).
+az monitor diagnostic-settings create --name apim-llm-logs --resource "$APIM_RES" \
+  --workspace "$LAW_ID" --export-to-resource-specific true \
+  --logs '[{"category":"GatewayLlmLogs","enabled":true}]' -o none
+
+# 9d. Enable LLM logging on the foundry API via APIM's built-in azureMonitor logger.
+#    largeLanguageModel.logs=enabled => token usage + SERVED model name ONLY. We deliberately
+#    omit "requests"/"responses" so prompt/completion BODIES are NOT logged (no PII, low cost).
+az rest --method PUT --url "https://management.azure.com$APIM_RES/loggers/azuremonitor?api-version=2024-05-01" \
+  --headers "Content-Type=application/json" --body '{"properties":{"loggerType":"azureMonitor"}}' -o none
+python3 -c "import json;json.dump({'properties':{'loggerId':'$APIM_RES/loggers/azuremonitor','largeLanguageModel':{'logs':'enabled'}}},open('$TMP/llmdiag.json','w'))"
+az rest --method PUT --url "https://management.azure.com$APIM_RES/apis/foundry/diagnostics/azuremonitor?api-version=2024-05-01" \
+  --headers "Content-Type=application/json" --body @"$TMP/llmdiag.json" -o none
+
 
 # ============================================================================
 # 10. THE INBOUND POLICY — the actual gate (see apim-policy.xml, fully commented)

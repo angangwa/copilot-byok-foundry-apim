@@ -10,9 +10,18 @@
     </validate-azure-ad-token>
     <set-variable name="oid"
        value="@(((Jwt)context.Variables[&quot;jwt&quot;]).Claims.GetValueOrDefault(&quot;oid&quot;, new string[]{&quot;&quot;})[0])" />
+    <!-- ⚠️ PII: developer display name from the 'name' claim (same extraction pattern as oid).
+         Convenient for human-readable cost attribution in the FinOps dashboard, but it writes
+         PERSONAL DATA into the metrics store (App Insights). In a regulated / FSI setting you may
+         NOT want this — delete this set-variable AND the matching developerName dimension below to
+         keep only the oid GUID, and resolve oid -> name at the dashboard layer instead. -->
+    <set-variable name="developerName"
+       value="@(((Jwt)context.Variables[&quot;jwt&quot;]).Claims.GetValueOrDefault(&quot;name&quot;, new string[]{&quot;&quot;})[0])" />
     <!-- Capture the requested model for per-model metering. preserveContent=true keeps the
          body intact for the backend. For model-router this reads "model-router"; the actual
-         routed model is in each response's "model" field. -->
+         routed model is in each response's "model" field, which this INBOUND policy cannot see.
+         Routed-model attribution is captured instead by the GatewayLlmLogs diagnostic
+         (ModelName); see finops/README.md "How it's tracked". -->
     <set-variable name="model"
        value="@{ var b = context.Request.Body?.As&lt;JObject&gt;(true); return (b != null &amp;&amp; b[&quot;model&quot;] != null) ? b[&quot;model&quot;].ToString() : &quot;unknown&quot;; }" />
 
@@ -51,13 +60,18 @@
       </when>
     </choose>
 
-    <!-- 3) Govern: per-developer TPM + metering keyed on Entra oid -->
-    <llm-token-limit counter-key="@(&quot;tpm-v2-&quot; + (string)context.Variables[&quot;oid&quot;])"
+    <!-- 3) Govern: per-developer TPM limit + token metering, both keyed on the Entra oid
+         so quota and cost attribution follow the individual developer. Raise
+         tokens-per-minute for scale — the Foundry deployment's capacity is the real
+         ceiling. (To clear an active back-off, rotate counter-key for a fresh bucket;
+         raising the limit alone won't reset one.) -->
+    <llm-token-limit counter-key="@(&quot;tpm-&quot; + (string)context.Variables[&quot;oid&quot;])"
        tokens-per-minute="50000" estimate-prompt-tokens="false"
        remaining-tokens-variable-name="remainingTokens" />
     <llm-emit-token-metric namespace="copilot">
       <dimension name="oid" value="@((string)context.Variables[&quot;oid&quot;])" />
       <dimension name="model" value="@((string)context.Variables[&quot;model&quot;])" />
+      <dimension name="developerName" value="@((string)context.Variables[&quot;developerName&quot;])" /> <!-- ⚠️ PII — see note above -->
     </llm-emit-token-metric>
 
     <!-- 4) Swap to APIM's managed identity and forward to Foundry — PATH-BASED routing.

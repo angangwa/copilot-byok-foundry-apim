@@ -252,6 +252,25 @@ python3 -c "import json;json.dump({'properties':{'loggerId':'$LOGGERID','alwaysL
 az rest --method PUT --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC/apis/foundry/diagnostics/applicationinsights?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body @"$TMP/diag.json" -o none
 
+# 10b/c. ROUTED-MODEL LOGGING (GatewayLlmLogs) — see infra/deploy.sh for the full rationale.
+#    The inbound token metric only records the REQUESTED name (e.g. "model-router"); the SERVED
+#    model is captured by the gateway's generative-AI logs. A Log Analytics workspace + a resource
+#    diagnostic (resource-specific table!) + per-API LLM logging (token+model only, NO bodies => no PII)
+#    populate ApiManagementGatewayLlmLog with DeploymentName + ModelName.
+APIM_RES="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC"
+az monitor log-analytics workspace create -g "$RG" -n law-copilot-poc -l "$LOC" -o none
+LAW_ID=$(az monitor log-analytics workspace show -g "$RG" -n law-copilot-poc --query id -o tsv)
+# --export-to-resource-specific true is REQUIRED (else data goes to legacy AzureDiagnostics, not the
+# resource-specific table, and the dashboard widget stays empty). First rows appear ~15 min later.
+az monitor diagnostic-settings create --name apim-llm-logs --resource "$APIM_RES" \
+  --workspace "$LAW_ID" --export-to-resource-specific true \
+  --logs '[{"category":"GatewayLlmLogs","enabled":true}]' -o none
+az rest --method PUT --url "https://management.azure.com$APIM_RES/loggers/azuremonitor?api-version=2024-05-01" \
+  --headers "Content-Type=application/json" --body '{"properties":{"loggerType":"azureMonitor"}}' -o none
+python3 -c "import json;json.dump({'properties':{'loggerId':'$APIM_RES/loggers/azuremonitor','largeLanguageModel':{'logs':'enabled'}}},open('$TMP/llmdiag.json','w'))"
+az rest --method PUT --url "https://management.azure.com$APIM_RES/apis/foundry/diagnostics/azuremonitor?api-version=2024-05-01" \
+  --headers "Content-Type=application/json" --body @"$TMP/llmdiag.json" -o none
+
 
 # ============================================================================
 # 11. THE INBOUND POLICY — the pass-through gate (apim-policy-passthrough.xml):

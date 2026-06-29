@@ -23,6 +23,15 @@
     </validate-azure-ad-token>
     <set-variable name="oid"
        value="@(((Jwt)context.Variables[&quot;jwt&quot;]).Claims.GetValueOrDefault(&quot;oid&quot;, new string[]{&quot;&quot;})[0])" />
+    <!-- ⚠️ PII: developer display name from the 'name' claim (same extraction pattern as oid).
+         Convenient for human-readable cost attribution in the FinOps dashboard, but it writes
+         PERSONAL DATA into the metrics store (App Insights). In a regulated / FSI setting you may
+         NOT want this — delete this set-variable AND the matching developerName dimension below to
+         keep only the oid GUID, and resolve oid -> name at the dashboard layer instead.
+         NOTE: in this pass-through variant Foundry's own diagnostic logs already record the real
+         developer oid, so resolving name at the dashboard (not here) is usually the cleaner choice. -->
+    <set-variable name="developerName"
+       value="@(((Jwt)context.Variables[&quot;jwt&quot;]).Claims.GetValueOrDefault(&quot;name&quot;, new string[]{&quot;&quot;})[0])" />
     <!-- Capture the requested model for per-model metering. preserveContent=true keeps the
          body intact for the backend. For model-router this reads "model-router". -->
     <set-variable name="model"
@@ -33,12 +42,13 @@
          the Foundry account) — a non-member's pass-through token gets 403 from Foundry. -->
 
     <!-- 2) Govern: per-developer TPM + metering keyed on the Entra oid -->
-    <llm-token-limit counter-key="@(&quot;tpm-v2-&quot; + (string)context.Variables[&quot;oid&quot;])"
+    <llm-token-limit counter-key="@(&quot;tpm-&quot; + (string)context.Variables[&quot;oid&quot;])"
        tokens-per-minute="50000" estimate-prompt-tokens="false"
        remaining-tokens-variable-name="remainingTokens" />
     <llm-emit-token-metric namespace="copilot">
       <dimension name="oid" value="@((string)context.Variables[&quot;oid&quot;])" />
       <dimension name="model" value="@((string)context.Variables[&quot;model&quot;])" />
+      <dimension name="developerName" value="@((string)context.Variables[&quot;developerName&quot;])" /> <!-- ⚠️ PII — see note above -->
     </llm-emit-token-metric>
 
     <!-- 3) Forward to the PRIVATE Foundry data-plane endpoint — DATA-PLANE ONLY.

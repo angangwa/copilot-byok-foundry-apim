@@ -1,0 +1,821 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# 💸 Copilot FinOps — per-developer usage & cost\nPer-developer cost & usage for **GitHub Copilot → private Foundry** via the APIM gateway. Figures are **token × price** estimates (cached input discounted) — adjust the **Price table** below to your rates."
+      },
+      "name": "title"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "p-time",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 1800000
+                },
+                {
+                  "durationMs": 3600000
+                },
+                {
+                  "durationMs": 14400000
+                },
+                {
+                  "durationMs": 43200000
+                },
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 259200000
+                },
+                {
+                  "durationMs": 604800000
+                }
+              ],
+              "allowCustom": true
+            },
+            "value": {
+              "durationMs": 259200000
+            }
+          },
+          {
+            "id": "p-models",
+            "version": "KqlParameterItem/1.0",
+            "name": "Models",
+            "label": "Models",
+            "type": 2,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "isRequired": true,
+            "query": "customMetrics\n| where name=='Total Tokens'\n| extend model=tostring(customDimensions.model)\n| where isnotempty(model)\n| distinct model",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "selectAllValue": "*"
+            },
+            "queryType": 0,
+            "resourceType": "microsoft.insights/components",
+            "value": [
+              "value::all"
+            ]
+          },
+          {
+            "id": "p-topn",
+            "version": "KqlParameterItem/1.0",
+            "name": "TopN",
+            "label": "Leaderboard size",
+            "type": 2,
+            "isRequired": true,
+            "typeSettings": {
+              "additionalResourceOptions": []
+            },
+            "jsonData": "[\"5\", \"10\", \"15\", \"20\", \"25\"]",
+            "value": "10"
+          },
+          {
+            "id": "p-gran",
+            "version": "KqlParameterItem/1.0",
+            "name": "Gran",
+            "label": "Trend bucket",
+            "type": 2,
+            "isRequired": true,
+            "typeSettings": {
+              "additionalResourceOptions": []
+            },
+            "jsonData": "[{\"value\": \"auto\", \"label\": \"Auto (scale to range)\"}, {\"value\": \"5m\", \"label\": \"5 min\"}, {\"value\": \"1h\", \"label\": \"Hourly\"}, {\"value\": \"1d\", \"label\": \"Daily\"}]",
+            "value": "auto"
+          },
+          {
+            "id": "p-budget",
+            "version": "KqlParameterItem/1.0",
+            "name": "Budget",
+            "label": "Monthly budget ($)",
+            "type": 1,
+            "isRequired": true,
+            "value": "15000"
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components"
+      },
+      "name": "params-main"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "p-prices",
+            "version": "KqlParameterItem/1.0",
+            "name": "PricesJson",
+            "label": "Price table (USD per 1M tokens, edit to your rates)",
+            "type": 1,
+            "isRequired": true,
+            "value": "[{\"model\": \"gpt-4.1\", \"inP\": 2.0, \"outP\": 8.0, \"cachedP\": 0.5}, {\"model\": \"gpt-5-mini\", \"inP\": 0.25, \"outP\": 2.0, \"cachedP\": 0.0625}, {\"model\": \"grok-4-1-fast-reasoning\", \"inP\": 0.2, \"outP\": 0.5, \"cachedP\": 0.05}, {\"model\": \"gpt-5.4-mini-2026-03-17\", \"inP\": 0.25, \"outP\": 2.0, \"cachedP\": 0.025}, {\"model\": \"gpt-5-nano-2025-08-07\", \"inP\": 0.05, \"outP\": 0.4, \"cachedP\": 0.005}, {\"model\": \"gpt-oss-120b\", \"inP\": 0.1, \"outP\": 0.4, \"cachedP\": 0.01}, {\"model\": \"gpt-5.5-2026-04-24\", \"inP\": 1.25, \"outP\": 10.0, \"cachedP\": 0.125}]",
+            "multiline": true
+          }
+        ],
+        "style": "formHorizontal",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components"
+      },
+      "name": "params-prices"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 📊 Executive summary"
+      },
+      "name": "h-kpi"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet perDev=base|summarize cost=sum(cost),tokens=sum(tokens),reqs=sum(reqs) by oid,dev;\nlet T=perDev|summarize cost=sum(cost),tokens=sum(tokens),reqs=sum(reqs),devs=dcount(oid);\nunion\n(T|project ord=1,Metric='💰 Total spend',Value=strcat('$',tostring(round(cost,2)))),\n(T|project ord=2,Metric='🔢 Tokens (M)',Value=tostring(round(tokens/1e6,1))),\n(T|project ord=3,Metric='📨 Requests',Value=tostring(reqs)),\n(T|project ord=4,Metric='🧑‍💻 Active developers',Value=tostring(devs)),\n(T|project ord=5,Metric='📊 Avg $/developer',Value=strcat('$',tostring(round(cost/devs,2)))),\n(T|project ord=6,Metric='⚙️ $ per 1k tokens',Value=strcat('$',tostring(round(cost/(tokens/1000.0),4))))\n|order by ord asc|project Metric,Value",
+        "size": 4,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 1,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 0,
+              "options": {
+                "style": "decimal",
+                "maximumFractionDigits": 2
+              }
+            }
+          },
+          "showBorder": true
+        }
+      },
+      "name": "kpis"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🏆 Usage concentration — who drives the spend\nThe **Pareto curve** plots cumulative spend against developers ranked by spend. A straight 45° line would mean everyone spends equally; the more it bows toward the top-left, the more a few developers dominate."
+      },
+      "name": "h-conc"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet perDev=base|summarize cost=sum(cost) by oid,dev;\nlet tot=toscalar(perDev|summarize sum(cost));let n=toscalar(perDev|count);\nlet R=perDev|order by cost desc|extend rank=row_number(),cum=row_cumsum(cost)|extend cumPct=100.0*cum/tot,devPct=100.0*rank/n;\nunion\n(R|summarize v=round(maxif(cumPct,rank<=5),1)|project ord=1,Metric='Top 5 developers drive',Value=strcat(tostring(v),'%')),\n(R|summarize v=round(maxif(cumPct,devPct<=10),1)|project ord=2,Metric='Top 10% of devs drive',Value=strcat(tostring(v),'%')),\n(R|summarize v=round(maxif(cumPct,devPct<=20),1)|project ord=3,Metric='Top 20% of devs drive',Value=strcat(tostring(v),'%')),\n(R|summarize v=round(100.0-maxif(cumPct,devPct<=50),1)|project ord=4,Metric='Bottom 50% of devs drive',Value=strcat(tostring(v),'%'))\n|order by ord asc|project Metric,Value",
+        "size": 4,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 1,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 0,
+              "options": {
+                "style": "decimal",
+                "maximumFractionDigits": 2
+              }
+            }
+          },
+          "showBorder": true
+        }
+      },
+      "name": "concentration"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet perDev=base|summarize cost=sum(cost) by oid,dev;\nlet tot=toscalar(perDev|summarize sum(cost));let n=toscalar(perDev|count);\nperDev|order by cost desc|extend rank=row_number(),cum=row_cumsum(cost)\n|project ['Developer percentile (ranked by spend)']=round(100.0*rank/n,1),['Cumulative % of spend']=round(100.0*cum/tot,1)",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "scatterchart",
+        "title": "Cumulative % of spend vs developer percentile (Pareto)",
+        "chartSettings": {
+          "ySettings": {
+            "min": 0,
+            "max": 100
+          },
+          "xSettings": {
+            "min": 0,
+            "max": 100
+          },
+          "xAxis": "Developer percentile (ranked by spend)",
+          "yAxis": [
+            "Cumulative % of spend"
+          ],
+          "showLegend": false
+        }
+      },
+      "name": "pareto"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet perDev=base|summarize cost=sum(cost),tokens=sum(tokens),reqs=sum(reqs) by oid,dev;\nlet tot=toscalar(perDev|summarize sum(cost));\nperDev|order by cost desc|extend Rank=row_number()\n|project Rank,Developer=dev,['Cost (USD)']=round(cost,2),['Tokens (k)']=round(tokens/1000.0,0),Requests=reqs,['% of spend']=round(100.0*cost/tot,1)\n|take {TopN}",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "title": "Top developers by spend",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Cost (USD)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue"
+              }
+            },
+            {
+              "columnMatch": "% of spend",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "green"
+              }
+            }
+          ]
+        }
+      },
+      "name": "leaderboard"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet spanDays=toscalar(customMetrics|where name=='Total Tokens'|summarize d=(max(timestamp)-min(timestamp))/1d|project d);\nlet days=iff(isnull(spanDays) or spanDays<0.0417,0.0417,spanDays);\nlet perDev=base|summarize cost=sum(cost) by oid,dev|extend daily=cost/days;\nperDev|extend ord=case(daily<5.0,1,daily<20.0,2,daily<50.0,3,daily<200.0,4,5),\nbucket=case(daily<5.0,'<$5',daily<20.0,'$5-20',daily<50.0,'$20-50',daily<200.0,'$50-200','$200+')\n|summarize Developers=count() by bucket,ord|order by ord asc|project ['Spend per developer ($/day)']=bucket,Developers",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart",
+        "title": "Developers by spend rate ($/day per developer)",
+        "chartSettings": {
+          "xAxis": "Spend per developer ($/day)",
+          "yAxis": [
+            "Developers"
+          ],
+          "showLegend": false
+        }
+      },
+      "name": "histogram"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🧠 Model mix & efficiency\n`model-router` requests appear under the **underlying model the router served** (e.g. grok-4-1-fast-reasoning, gpt-5.4-mini) — that's the model that actually billed. `$ / 1k tokens` is blended cost ÷ tokens per model."
+      },
+      "name": "h-model"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nbase|summarize cost=sum(cost),tokens=sum(tokens),reqs=sum(reqs) by model\n|project Model=model,['Cost (USD)']=round(cost,2),['Tokens (M)']=round(tokens/1e6,2),['Avg tokens/req']=round(tokens/reqs,0),['$ / 1k tokens']=round(cost/(tokens/1000.0),4)\n|order by ['Cost (USD)'] desc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "title": "Cost & efficiency by model",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Cost (USD)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue"
+              }
+            }
+          ]
+        }
+      },
+      "name": "model-grid"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nbase|summarize ['Cost (USD)']=round(sum(cost),2) by Model=model|order by ['Cost (USD)'] desc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "piechart",
+        "title": "Spend share by model"
+      },
+      "name": "model-pie"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet g='{Gran}';\nlet span=toscalar(customMetrics|where name=='Total Tokens'|summarize x=max(timestamp)-min(timestamp)|project x);\nlet gstep=case(g=='5m',5m, g=='1h',1h, g=='1d',1d, case(span>14d,1d, span>2d,1h, 5m));\nbase|join kind=inner (customMetrics\n|where name=='Total Tokens'|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model)\n|where '*' in ({Models}) or model in ({Models})\n|summarize tt=sum(valueSum) by oid,model,bin(timestamp,gstep)) on oid,model\n|extend costSlice=cost*(tt/tokens)\n|summarize ['Spend (USD)']=round(sum(costSlice),2) by timestamp,model\n|order by timestamp asc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "areachart",
+        "title": "Spend by model over time — each point = one {Gran:label} bucket",
+        "chartSettings": {
+          "xAxis": "timestamp",
+          "yAxis": [
+            "Spend (USD)"
+          ],
+          "showLegend": true
+        }
+      },
+      "name": "trend"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### 🔀 Live routing — real gateway traffic\nThe **only real** routed-model attribution: APIM's *GatewayLlmLogs* diagnostic records the model the router actually served (**Served model**) vs the requested deployment. The synthetic seeder can't write here, so this reflects **genuine** gateway calls only — sparse until real Copilot traffic flows. (Charts above blend real + synthetic.)"
+      },
+      "name": "h-live"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "ApiManagementGatewayLlmLog\n|summarize Requests=count(), Tokens=sum(TotalTokens) by ['Requested']=DeploymentName, ['Served model']=ModelName\n|order by Requests desc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 2592000000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{LAW_RESOURCE_ID}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Requests",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue"
+              }
+            }
+          ]
+        },
+        "title": "Routed model by requested deployment (real traffic · GatewayLlmLogs)"
+      },
+      "name": "live-routing"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🗓️ Usage timing (day × time-of-day, CEST)\nRequest intensity (% of the busiest cell) by day-of-week and 3-hour window — **darker = busier**. Shows work-hours / weekday concentration (fills out as more history accrues)."
+      },
+      "name": "h-heat"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let peak=toscalar(customMetrics|where name=='Total Tokens'|extend lt=timestamp+2h\n|extend dw=toint(dayofweek(lt)/1d),hr=hourofday(lt),model=tostring(customDimensions.model)\n|where '*' in ({Models}) or model in ({Models})|extend ws=(hr/3)*3|summarize r=sum(valueCount) by dw,ws|summarize m=max(r));\ncustomMetrics|where name=='Total Tokens'\n|extend lt=timestamp+2h|extend dow=toint(dayofweek(lt)/1d),hour=hourofday(lt),model=tostring(customDimensions.model)\n|where '*' in ({Models}) or model in ({Models})\n|extend ws=(hour/3)*3\n|extend win=strcat(iff(ws<10,'0',''),tostring(ws),'-',iff(ws+3<10,'0',''),tostring(ws+3)),dayord=iff(dow==0,7,dow)\n|summarize req=sum(valueCount) by win,dayord\n|extend Intensity=toint(round(100.0*req/peak,0))\n|evaluate pivot(dayord,sum(Intensity),win)|order by win asc\n|project ['Time (CEST)']=win, Mon=column_ifexists('1',0), Tue=column_ifexists('2',0), Wed=column_ifexists('3',0), Thu=column_ifexists('4',0), Fri=column_ifexists('5',0), Sat=column_ifexists('6',0), Sun=column_ifexists('7',0)",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "title": "Usage intensity by time-of-day × day (CEST)",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "colors",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "75",
+                    "representation": "redBright",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "50",
+                    "representation": "red",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "30",
+                    "representation": "orange",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "15",
+                    "representation": "yellow",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "1",
+                    "representation": "green",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "gray",
+                    "text": "{0}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "name": "heatmap"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 📐 Context window & caching\nContext sizes per request, and how much is served from cache. Long-context agentic work reuses a stable prefix → higher cache-hit % (cost already discounts cached input)."
+      },
+      "name": "h-ctx"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let pr=customMetrics\n|where name=='Prompt Tokens'|where valueCount==1\n|extend model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)|where '*' in ({Models}) or model in ({Models});\npr|extend ord=case(valueSum<50000,1,valueSum<200000,2,valueSum<500000,3,4),band=case(valueSum<50000,'<50k',valueSum<200000,'50k-200k',valueSum<500000,'200k-500k','500k-1M')\n|summarize Requests=count() by band,ord\n|extend ['% of requests']=round(100.0*Requests/toscalar(pr|count),1)\n|order by ord asc|project ['Context band']=band,Requests,['% of requests']",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart",
+        "title": "Share of requests by context size",
+        "chartSettings": {
+          "xAxis": "Context band",
+          "yAxis": [
+            "% of requests"
+          ],
+          "showLegend": false
+        }
+      },
+      "name": "reqband"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let pr=customMetrics\n|where name=='Prompt Tokens'|where valueCount==1\n|extend model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)|where '*' in ({Models}) or model in ({Models});\npr|summarize avgCtx=avg(valueSum) by dev\n|extend ord=case(avgCtx<50000,1,avgCtx<200000,2,avgCtx<500000,3,4),band=case(avgCtx<50000,'<50k',avgCtx<200000,'50k-200k',avgCtx<500000,'200k-500k','500k-1M')\n|summarize Developers=count() by band,ord|order by ord asc|project ['Typical context (avg/request)']=band,Developers",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart",
+        "title": "Developers by typical context size",
+        "chartSettings": {
+          "xAxis": "Typical context (avg/request)",
+          "yAxis": [
+            "Developers"
+          ],
+          "showLegend": false
+        }
+      },
+      "name": "ctxusers"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet T=base|summarize prompt=sum(prompt),cached=sum(cached),savings=sum(savings),cost=sum(cost);\nunion\n(T|project ord=1,Metric='⚡ Cache-hit rate',Value=strcat(tostring(round(100.0*cached/prompt,1)),'%')),\n(T|project ord=2,Metric='💵 Saved by caching',Value=strcat('$',tostring(round(savings,2)))),\n(T|project ord=3,Metric='🧮 Cached input (M tokens)',Value=tostring(round(cached/1e6,1))),\n(T|project ord=4,Metric='📉 Cost without caching',Value=strcat('$',tostring(round(cost+savings,2))))\n|order by ord asc|project Metric,Value",
+        "size": 4,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 1,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 0,
+              "options": {
+                "style": "decimal",
+                "maximumFractionDigits": 2
+              }
+            }
+          },
+          "showBorder": true
+        }
+      },
+      "name": "cache-tiles"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prc=customMetrics\n|where name in ('Prompt Tokens','Prompt Cached Tokens')|where valueCount==1\n|extend model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)|where '*' in ({Models}) or model in ({Models});\nprc|summarize prompt=sumif(valueSum,name=='Prompt Tokens'),cached=sumif(valueSum,name=='Prompt Cached Tokens'),avgCtx=avgif(valueSum,name=='Prompt Tokens') by dev\n|extend ord=case(avgCtx<50000,1,avgCtx<200000,2,avgCtx<500000,3,4),band=case(avgCtx<50000,'<50k',avgCtx<200000,'50k-200k',avgCtx<500000,'200k-500k','500k-1M')\n|summarize promptT=sum(prompt),cachedT=sum(cached),Developers=count() by band,ord\n|extend ['Cache-hit %']=round(100.0*cachedT/promptT,1)\n|order by ord asc|project ['Avg context band']=band,Developers,['Cache-hit %']",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart",
+        "title": "Cache-hit % by context band",
+        "chartSettings": {
+          "xAxis": "Avg context band",
+          "yAxis": [
+            "Cache-hit %"
+          ],
+          "showLegend": false
+        }
+      },
+      "name": "cache-by-band"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🛡️ Governance — rate-limit pressure\nDevelopers whose peak burst approaches the **50k TPM** per-user limit. *Implied peak TPM = busiest 5-minute token sum ÷ 5* — a capacity signal derived from token bins (not from 429s, which carry no developer identity)."
+      },
+      "name": "h-gov"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\ncustomMetrics|where name=='Total Tokens'\n|extend dev=tostring(customDimensions.developerName),model=tostring(customDimensions.model)\n|where isnotempty(dev)|where '*' in ({Models}) or model in ({Models})\n|summarize burst=sum(valueSum) by dev,bin(timestamp,5m)\n|summarize peak5=tolong(max(burst)) by dev\n|extend ['Implied peak TPM']=tolong(peak5/5),['% of 50k TPM limit']=round(100.0*(peak5/5)/50000.0,0)\n|project Developer=dev,['Peak 5-min tokens']=peak5,['Implied peak TPM'],['% of 50k TPM limit']\n|order by ['Peak 5-min tokens'] desc|take 12",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "title": "Approaching the 50k TPM limit",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Peak 5-min tokens",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "orange"
+              }
+            },
+            {
+              "columnMatch": "% of 50k TPM limit",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "colors",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "100",
+                    "representation": "redBright",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "60",
+                    "representation": "orange",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "green",
+                    "text": "{0}{1}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "name": "governance"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🔎 Per-developer drill-down (chargeback)"
+      },
+      "name": "h-drill"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "p-dev",
+            "version": "KqlParameterItem/1.0",
+            "name": "Developer",
+            "label": "Developer",
+            "type": 2,
+            "isRequired": true,
+            "query": "customMetrics\n| where name=='Total Tokens'\n| extend dev=tostring(customDimensions.developerName)\n| where isnotempty(dev)\n| distinct dev\n| order by dev asc",
+            "typeSettings": {
+              "additionalResourceOptions": []
+            },
+            "queryType": 0,
+            "resourceType": "microsoft.insights/components",
+            "value": null,
+            "defaultValue": "value::1"
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components"
+      },
+      "name": "params-dev"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nbase|where dev=='{Developer}'\n|summarize ['Cost (USD)']=round(sum(cost),2),['Tokens (k)']=round(sum(tokens)/1000.0,0),Requests=sum(reqs) by Model=model\n|order by ['Cost (USD)'] desc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "title": "Selected developer — by model",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Cost (USD)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue"
+              }
+            }
+          ]
+        }
+      },
+      "name": "drill-grid"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet g='{Gran}';\nlet span=toscalar(customMetrics|where name=='Total Tokens'|summarize x=max(timestamp)-min(timestamp)|project x);\nlet gstep=case(g=='5m',5m, g=='1h',1h, g=='1d',1d, case(span>14d,1d, span>2d,1h, 5m));\nbase|where dev=='{Developer}'\n|join kind=inner (customMetrics|where name=='Total Tokens'|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model)\n|summarize tt=sum(valueSum) by oid,model,bin(timestamp,gstep)) on oid,model\n|extend costSlice=cost*(tt/tokens)\n|summarize ['Spend (USD)']=round(sum(costSlice),2) by timestamp|order by timestamp asc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "areachart",
+        "title": "Selected developer — spend over time (per {Gran:label} bucket)",
+        "chartSettings": {
+          "xAxis": "timestamp",
+          "yAxis": [
+            "Spend (USD)"
+          ],
+          "showLegend": false
+        }
+      },
+      "name": "drill-trend"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 📈 Budget & forecast\nMonthly spend projected from the current run-rate vs an editable budget. *Projection = spend in window ÷ hours of data in window × 730 (avg hrs/month)* — shows “accruing…” until there are ≥3h of data, and sharpens as history accrues."
+      },
+      "name": "h-fc"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let prices=todynamic('{PricesJson}');\nlet P=(print p=prices|mv-expand p|project model=tostring(p['model']),inP=todouble(p['inP']),outP=todouble(p['outP']),cachedP=todouble(p['cachedP']));\nlet base=customMetrics\n|where name in ('Prompt Tokens','Completion Tokens','Total Tokens','Prompt Cached Tokens')\n|extend oid=tostring(customDimensions.oid),model=tostring(customDimensions.model),dev=tostring(customDimensions.developerName)\n|where isnotempty(dev)\n|where '*' in ({Models}) or model in ({Models})\n|summarize val=sum(valueSum),cnt=sum(valueCount) by oid,dev,model,name\n|summarize prompt=sumif(val,name=='Prompt Tokens'),completion=sumif(val,name=='Completion Tokens'),tokens=sumif(val,name=='Total Tokens'),cached=sumif(val,name=='Prompt Cached Tokens'),reqs=tolong(sumif(cnt,name=='Total Tokens')) by oid,dev,model\n|lookup P on model\n|extend inP=coalesce(inP,1.0),outP=coalesce(outP,4.0),cachedP=coalesce(cachedP,0.25)\n|extend cost=((prompt-cached)*inP+cached*cachedP+completion*outP)/1e6, savings=(cached*(inP-cachedP))/1e6;\nlet perDev=base|summarize cost=sum(cost) by oid,dev;\nlet tot=toscalar(perDev|summarize sum(cost));\nlet spanRaw=toscalar(customMetrics|where name=='Total Tokens'|where isnotempty(tostring(customDimensions.developerName))|summarize (max(timestamp)-min(timestamp))/1h);\nlet span=iff(spanRaw<0.05,0.05,spanRaw);\nlet proj=tot/span*730.0;let budget=todouble('{Budget}');let ready=span>=3.0;\nunion\n(print ord=1,Metric='🗓️ Window (hrs of data)',Value=tostring(round(span,2))),\n(print ord=2,Metric='📈 Projected monthly spend',Value=iff(ready,strcat('$',tostring(round(proj,0))),'accruing…')),\n(print ord=3,Metric='🎯 Monthly budget',Value=strcat('$',tostring(round(budget,0)))),\n(print ord=4,Metric='📊 % of budget',Value=iff(ready,strcat(tostring(round(100.0*proj/budget,0)),'%'),'—'))\n|order by ord asc|project Metric,Value",
+        "size": 4,
+        "timeContext": {
+          "durationMs": 3600000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 1,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 0,
+              "options": {
+                "style": "decimal",
+                "maximumFractionDigits": 2
+              }
+            }
+          },
+          "showBorder": true
+        }
+      },
+      "name": "forecast"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "{APPI_RESOURCE_ID}"
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

@@ -23,7 +23,7 @@ runs **private networking by default** and treats the network as one defense-in-
 authz (no bespoke Graph code to certify), a least-privilege gateway (APIM holds **no** standing
 Foundry credential), and Conditional Access applied to the actual resource access. The trade is that
 no-bypass now rests on the network boundary instead of identity — acceptable when private networking
-is the baseline anyway. (Full analysis in the architecture discussion that led here.)
+is the baseline anyway.
 
 ---
 
@@ -191,10 +191,10 @@ The two rows that change **mechanism** vs Option A are the headline of this opti
 **Foundry RBAC** (not an APIM Graph check), and bypass is blocked by **network** (not identity/401).
 
 > ⚠️ **Authorization is the *union* of all Azure RBAC that grants Foundry data-plane access — including
-> inherited assignments.** Verified live: our `admin` account is **not** in `copilot-users`, yet its
-> call returned `200` because it holds a subscription-scoped **`Foundry User`** role that inherits to
-> the account. In Option A the APIM Graph group-check was the *sole* gate and would have blocked admin;
-> here, anyone with a broadly-scoped/inherited data-plane role gets in regardless of group membership.
+> inherited assignments.** A principal that is **not** in `copilot-users` but holds a subscription-scoped
+> **`Foundry User`** role still gets `200`, because that role inherits down to the account. In Option A
+> the APIM Graph group-check is the *sole* gate and would block it; here, anyone with a broadly-scoped or
+> inherited data-plane role gets in regardless of group membership.
 > **Consequence for least-privilege:** to make group membership the *effective* boundary, audit and
 > remove broader data-plane assignments (subscription/MG-level `Foundry User` / `Cognitive Services
 > OpenAI User`), or keep an APIM group-check as belt-and-suspenders. This is a real, concrete

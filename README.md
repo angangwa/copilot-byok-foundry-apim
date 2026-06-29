@@ -11,13 +11,9 @@ the box:
 
 This repo contains **two working implementations**. They are identical except for **one design
 decision**: at the gateway, does APIM call Foundry with **its own managed identity**, or does it
-**pass the developer's token straight through**? That single choice cascades into *how authorization
-works, what makes the gateway non-bypassable, whether Foundry can be public, and what shows up in the
-audit log*. Everything below exists to let an architect weigh that one fork.
+**pass the developer's token straight through**?
 
-> **Identical in both** (so not a basis for choosing): APIM validates the Entra token, applies the
-> per-user **TPM limit** and per-`oid`/`model` **metering**, and can apply per-model request policy.
-> The differences are entirely in the **authorization** and **backend-call** mechanics described below.
+> **Identical in both** (so not a basis for choosing): APIM validates the Entra token, applies the per-user **TPM limit** and per-`oid`/`model` **metering**, and can apply per-model request policy. The differences are entirely in the **authorization** and **backend-call** mechanics described below.
 
 ---
 
@@ -115,10 +111,24 @@ README.md                 # this file — the design fork + pros/cons of each op
 plan.md                   # original design write-up (Option A)
 infra/                    # Option A — MI-swap (Basic v2, public Foundry)
 infra-passthrough/        # Option B — pass-through (Standard v2 + VNet, private Foundry)
+finops/                   # per-developer FinOps dashboard (Azure Workbook) over the gateway metrics
 ```
 
 Each folder is a self-contained, reproducible deploy with its own README, `deploy.sh`,
 `test-gateway.sh`, and client snippets.
+
+## FinOps dashboard
+
+Both options already emit per-developer token metrics (`oid` + `model`) to Application Insights.
+[`finops/`](finops/README.md) turns those into an **Azure Monitor Workbook** that surfaces the usage
+pattern that defines coding-agent spend at scale — **a small share of developers drives most of the
+cost** (Pareto concentration, top-N leaderboards, model mix, per-developer chargeback drill-down,
+budget/forecast). No gateway changes required.
+
+```bash
+python3 finops/seed-usage.py     # populate a synthetic developer fleet for the demo
+bash finops/deploy-finops.sh     # publish the workbook (idempotent)
+```
 
 ## Deploy & validate
 
@@ -129,9 +139,6 @@ bash infra/deploy.sh                      # Option A  → apim-copilot-poc
 #   …or…
 bash infra-passthrough/deploy.sh          # Option B  → apim-copilot-poc-pt  (new RG, coexists)
 ```
-
-> `config.env` (your real IDs) is **git-ignored** — never committed. The scripts read it
-> automatically; resource names are non-secret defaults you can override there.
 
 **Tear it down** (each option deletes its own resource group and purges the soft-deleted
 Cognitive Services + APIM so their names free up; the shared group/test user are left intact):

@@ -2,7 +2,7 @@
 
 > Part of [Governed GitHub Copilot → Private Foundry via APIM](../README.md). This is **Option A**:
 > APIM swaps the developer's token for its **own managed identity** to call Foundry, so **identity**
-> (not the network) makes the gateway non-bypassable — which lets Foundry stay **public**. For the
+> makes the gateway non-bypassable. For the
 > network-enforced alternative (developer-identity pass-through to a **private** Foundry), see
 > [`infra-passthrough/`](../infra-passthrough/README.md).
 
@@ -123,7 +123,7 @@ rejected (`401`), so the gateway — with its auth, group check, and limits — 
 
 ---
 
-## Identity & permissions (the part that confuses everyone)
+## Identity & permissions
 
 APIM's managed identity (the `apim-copilot-poc` "enterprise application" in Entra) is granted access
 in **two completely separate systems**:
@@ -258,7 +258,7 @@ Services User** (for the project/`ai.azure.com` hop) in addition to **Cognitive 
 Per-request metering carries a **`model` dimension** so you can break usage down by model in App
 Insights (and by `oid` for per-developer chargeback).
 
-## Using the GitHub Copilot CLI (BYOK) — confirmed working
+## Using the GitHub Copilot CLI (BYOK)
 
 The [Copilot CLI](https://docs.github.com/copilot) (`npm i -g @github/copilot`) drives the governed
 gateway in **BYOK mode** — and notably **no GitHub login is required** in that mode. It's env-var
@@ -283,11 +283,11 @@ copilot -p "explain this repo" --allow-all-tools
 the audience our gateway validates — picking up `az login`, a managed identity, or
 `AZURE_CLIENT_ID/TENANT_ID/CLIENT_SECRET`. Same mechanism as the
 [Copilot SDK Azure managed-identity guide](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/azure-managed-identity),
-and it sidesteps the static-token chore (cf. [Limitations](#governance--operational-caveats)).
+and it sidesteps the static-token chore of a pasted bearer.
 
 > ⚠️ Leave `COPILOT_PROVIDER_AZURE_API_VERSION` **unset**. Setting it flips the CLI to the classic
 > `…/openai/deployments/<name>/…?api-version=…` wire format, which doesn't match our `/openai/v1/*`
-> route → **`404`**. Unset, it calls our base URL as-is (versionless v1). *(Verified both ways.)*
+> route → **`404`**. Unset, it calls our base URL as-is (versionless v1).
 
 ### Pasted bearer token (any client)
 
@@ -307,27 +307,20 @@ export COPILOT_PROVIDER_TYPE="openai"
 export COPILOT_PROVIDER_BEARER_TOKEN="$(az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv)"
 ```
 
-Verified (both provider types): `gpt-4.1` **and** `model-router` return governed completions, and an
-**out-of-group** token is rejected with **`403`** at the CLI. The CLI is governed identically to VS Code.
+Both provider types work: `gpt-4.1` **and** `model-router` return governed completions, and an
+**out-of-group** token is rejected with **`403`** at the CLI — the CLI is governed identically to VS Code.
 
 ### Picking the wire-api (`COPILOT_PROVIDER_WIRE_API`)
 
-Every model works through the gateway — just match the wire-api to the model:
+`completions` is the universal default — it works for every model and is what the examples above use.
+Only reach for `responses` with a **reasoning** model (e.g. `gpt-5-mini`): the CLI's `responses` agent
+loop sends reasoning parameters (`reasoning.encrypted_content`, `reasoning.effort`) that non-reasoning
+models reject, so **`gpt-4.1` and `model-router` must stay on `completions`** (model-router returns
+`400 Encrypted content is not supported`). There's no CLI flag to change this — adjustable BYOK reasoning
+effort is an [open request](https://github.com/github/copilot-cli/issues/2559).
 
-| Model | Use this wire-api |
-|---|---|
-| `gpt-4.1`, `model-router` (non-reasoning) | **`completions`** — the default; works for every model (verified ✅) |
-| `gpt-5-mini`, `gpt-5.x` (reasoning) | `completions` **or** `responses` (both verified ✅) |
-
-**`completions` is the simple, universal choice** and is what the examples above use — keep it unless you
-specifically want a reasoning model's richer `responses` flow. Reach for **`responses` only with a
-reasoning model**: the Copilot CLI's agent loop drives `responses` with reasoning parameters
-(`reasoning.encrypted_content` + `reasoning.effort`) that non-reasoning models don't accept, so
-`gpt-4.1`/`model-router` should stay on `completions` (there's no CLI flag to change this today —
-adjustable BYOK reasoning effort is an [open request](https://github.com/github/copilot-cli/issues/2559)).
-
-This is a CLI-client behaviour, **not** a gateway or model limit — the gateway serves `/responses` for any
-model, e.g. a direct call to `gpt-4.1` returns `200`:
+This is a **client** constraint, not the gateway: APIM serves `/responses` for any model — a direct curl
+to `gpt-4.1` returns `200`:
 
 ```bash
 curl -s https://apim-copilot-poc.azure-api.net/foundry/openai/v1/responses \
@@ -339,7 +332,7 @@ curl -s https://apim-copilot-poc.azure-api.net/foundry/openai/v1/responses \
 
 `infra/test-gateway.sh` exercises the full matrix (it mints a token *as* the test user — note that
 password/ROPC login is blocked by MFA in this tenant, so use the device-code flow / an interactive
-sign-in). Verified results:
+sign-in). Results:
 
 | Test | Expected | Result |
 |---|---|---|
@@ -347,7 +340,7 @@ sign-in). Verified results:
 | Out-of-group user → APIM | 403 | ✅ |
 | No token → APIM | 401 | ✅ |
 | Bypass: user token straight to Foundry | 401 | ✅ |
-| Exceed per-user tokens/min | 429 | ✅ (fired live in Copilot) |
+| Exceed per-user tokens/min | 429 | ✅ |
 | Per-user metering | metrics in App Insights | ✅ (token totals by `oid`) |
 
 Query the per-user usage in App Insights:
@@ -362,81 +355,41 @@ customMetrics
 
 ---
 
-## Limitations
+## Limitations & scope
 
-What this PoC (and the underlying platforms) **can't** do today. None of these are gateway bugs —
-the APIM gateway serves both `/chat/completions` and `/responses` for any supported model, fully
-governed; the constraints are in the **clients** and **models**.
-
-### Client coverage (which client speaks which API)
+None of these are gateway bugs — APIM serves both `/chat/completions` and `/responses` for any
+supported model, fully governed. The constraints live in the **clients**:
 
 | Client | Chat Completions | Responses API |
 |---|---|---|
-| **VS Code Copilot** (`azure` BYOK vendor) | ✅ gpt-4.1, model-router | ❌ vendor is chat-only — it sends `messages` + nested-`function.name` tools, so a `/responses` URL fails `400` |
+| **VS Code Copilot** (`azure` BYOK vendor) | ✅ gpt-4.1, model-router | ❌ chat-only vendor — sends `messages` + nested-`function.name` tools, so a `/responses` URL fails `400` |
 | **Copilot CLI** (`completions` wire-api) | ✅ gpt-4.1, model-router | — |
-| **Copilot CLI** (`responses` wire-api) | — | ✅ **reasoning models only** (e.g. `gpt-5-mini`); ❌ gpt-4.1 (non-reasoning), ❌ model-router |
+| **Copilot CLI** (`responses` wire-api) | — | ✅ reasoning models only (e.g. `gpt-5-mini`) |
 
-- **Inline (grey-text) completions stay GitHub-hosted** — only **chat/agent** traffic is governable
-  via BYOK. This can't be redirected; set the expectation up front.
-- **VS Code's `azure` vendor can't use the Responses API** — it only speaks the chat-completions wire
-  format. Use the `/chat/completions` model entries in VS Code.
-
-### model-router limitations
-
-- **Two APIs on two endpoints.** model-router serves `/chat/completions` only on the **data-plane**
-  endpoint and `/responses` only on the **Foundry project** endpoint. (The gateway hides this with
-  path-based routing — see [the model-router section](#-the-model-router-endpoint-split-and-how-the-gateway-absorbs-it).)
-- **Use `completions` for model-router in the CLI.** The CLI's `responses` mode requests
-  `reasoning.encrypted_content`, which model-router rejects (`400 Encrypted content is not supported`),
-  and it only accepts `reasoning.effort` of `low`/`medium`/`high` — consistent with it routing to a
-  different underlying model each turn. So **model-router runs in the CLI via `completions`** (verified
-  working for both `gpt-4.1` and `model-router`).
-
-### Governance & operational caveats
-
-- **Streaming & token accuracy (the two policies differ).**
-  - **Metering** (`llm-emit-token-metric`) records the **actual** `usage` from the response — accurate
-    for normal *and* streamed responses. It's inaccurate **only if a stream is unexpectedly
-    interrupted/terminated**, and streamed responses must carry usage (`stream_options.include_usage=true`;
-    some models omit it otherwise — consider injecting it in policy for reliable streamed metering).
-  - **Rate limiting** (`llm-token-limit`) **estimates** prompt and completion tokens whenever the
-    request is streamed (`stream: true`), per Microsoft docs — so per-minute *enforcement* is
-    approximate under streaming (fine for budgets/alerting; the metric itself is exact).
-- **Group-check cache (1 h).** A user removed from the group keeps access until their cache entry
-  expires (tune `duration` in the policy). Resetting a token-limit block requires rotating the
-  `counter-key` (raising the TPM alone doesn't clear an active back-off).
-- **Token acquisition needs MFA-capable flow.** Password/ROPC login is blocked by MFA in this tenant —
-  use device-code or interactive sign-in to mint a developer token.
-- **CLI BYOK *pasted* bearer is static.** A pasted `COPILOT_PROVIDER_BEARER_TOKEN` doesn't auto-refresh
-  (~60–90 min); re-export when it expires. (VS Code's keyless path refreshes automatically.) **Avoid the
-  chore entirely** with `COPILOT_PROVIDER_TYPE=azure` and *no* token set — the CLI uses
-  `DefaultAzureCredential` (your `az login` / managed identity) to mint the `cognitiveservices` token
-  itself; see [the CLI section](#openai-vs-azure-provider-type--both-work-azure-adds-a-keyless-option).
-- **Cross-tenant.** The keyless path uses the signed-in account's **home tenant**; it won't work for
-  cross-tenant testing.
-
-### Scope (intentionally out for this PoC)
-
+- **Inline (grey-text) completions stay GitHub-hosted** — only chat/agent traffic is governable via
+  BYOK; this can't be redirected.
 - **No private networking** — Foundry is public (`publicNetworkAccess = Enabled`); see
   [Production hardening](#production-hardening).
-- **POST-only API surface** — the gateway exposes `POST /openai/v1/*`. Responses follow-up GETs
-  (`/responses/{id}`) aren't wired; add a GET operation if a client needs them.
+- **POST-only API surface** — the gateway exposes `POST /openai/v1/*`; Responses follow-up GETs
+  (`/responses/{id}`) aren't wired (add a GET operation if a client needs them).
 
-## Gotchas we hit (so you don't)
+### Operational caveats
 
-- **Graph permission for the group check.** `directoryObjects/{id}/checkMemberGroups` (app-only)
-  needs the broad `Directory.Read.All`. Instead we **list the group's `transitiveMembers` filtered
-  by the user's `oid`**, which works with least-privilege **`GroupMember.Read.All`**. A wrong/missing
-  permission returns a `403 Authorization_RequestDenied` that *looks* like propagation lag — it isn't.
-- **URL-encode `$filter` spaces** (`%20`) in APIM `set-url`, or the Graph call 500s.
-- **Resetting a token-limit block.** The v2 `llm-token-limit` token-bucket persists its back-off;
-  raising `tokens-per-minute` doesn't clear an active block. **Rotate the `counter-key`** (e.g.
-  `tpm-v2-<oid>`) to hand everyone a fresh bucket.
-- **MFA blocks password (ROPC) login** (`AADSTS50076`) — use device-code or interactive sign-in to
-  mint a test token.
-- **Streaming → estimated token counts.** Copilot streams, so metering/limits are approximate (fine
-  for budgets, not penny-accurate chargeback).
-- **App-role propagation** can take a few minutes after `deploy.sh` step 6 before the group check works.
+- **Streaming & token accuracy.** Metering (`llm-emit-token-metric`) records the **actual** `usage`
+  from the response — accurate for normal and streamed responses alike (inaccurate only if a stream is
+  interrupted, and streamed responses must carry `stream_options.include_usage=true`). Rate limiting
+  (`llm-token-limit`) **estimates** tokens for streamed requests, so per-minute enforcement is
+  approximate under streaming — fine for budgets; the metric itself stays exact.
+- **Group-check cache (1 h).** A user removed from the group keeps access until their cache entry
+  expires (tune `duration` in the policy). Resetting a token-limit block requires rotating the
+  `counter-key` — raising the TPM alone doesn't clear an active back-off.
+- **Least-privilege group check.** The policy authorizes by listing the group's `transitiveMembers`
+  filtered by the user's `oid`, which needs only **`GroupMember.Read.All`** — not the broader
+  `Directory.Read.All` that `checkMemberGroups` would require.
+- **Token acquisition needs an MFA-capable flow.** Password/ROPC login is blocked by MFA in this
+  tenant — use device-code or interactive sign-in.
+- **Cross-tenant.** The keyless path uses the signed-in account's home tenant; it won't work for
+  cross-tenant testing.
 
 ---
 

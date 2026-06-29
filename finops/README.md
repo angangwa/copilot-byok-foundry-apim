@@ -15,6 +15,31 @@ It defaults to Option A (`infra/`, App Insights `appi-copilot-poc`), but the pas
 (`infra-passthrough/`) emits the **identical** telemetry, so the same workbook serves both — just point
 the scripts at the `-pt` resources ([see below](#pointing-it-at-the-pass-through-deployment-infra-passthrough)).
 
+## What it looks like
+
+> Shown here populated with the **synthetic demo fleet** (`seed-usage.py`) — illustrative shapes, not
+> real spend. The *Live routing* table is the one exception: it shows genuine gateway traffic.
+
+**Executive summary + usage concentration** — headline spend / token / developer KPIs, the Pareto curve,
+and the top-developer leaderboard that answers *"who drives the spend?"*:
+
+![Executive summary KPI tiles, the Pareto cumulative-spend curve, and the top-developer leaderboard](screenshots/01-executive-concentration.png)
+
+**Model mix + live routing** — spend share and trend by model, plus the *Live routing* table where APIM's
+`GatewayLlmLogs` reveals the real model `model-router` actually served per request:
+
+![Spend-share donut and spend-over-time-by-model area chart, with the live routing table from GatewayLlmLogs](screenshots/02-model-mix-live-routing.png)
+
+**Caching + governance** — cache-hit rate by context-size band, and the developers whose peak burst
+approaches the per-user **50k TPM** limit:
+
+![Cache-hit percentage by context band and the governance rate-limit-pressure table](screenshots/03-caching-governance.png)
+
+**Per-developer chargeback + forecast** — a single developer's spend by model and over time, plus a
+run-rate projection against an editable monthly budget:
+
+![Per-developer drill-down by model and spend-over-time trend, with budget and forecast tiles](screenshots/04-drilldown-forecast.png)
+
 ## What it shows
 
 | Section | Widgets |

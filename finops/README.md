@@ -31,7 +31,7 @@ the scripts at the `-pt` resources ([see below](#pointing-it-at-the-pass-through
 Cost is a **token × price** estimate that **discounts cached input tokens** (the gateway already emits
 a `Prompt Cached Tokens` metric — no policy change needed). Prices are an **editable parameter** (USD
 per 1M tokens: `inP` input, `outP` output, `cachedP` cached-input) defaulting to list-price
-placeholders (cached ≈ 25% of input) — change them to your negotiated rates. A model with no price-table
+placeholders (cached ≈ 10–25% of input) — change them to your negotiated rates. A model with no price-table
 entry falls back to a blended default, so cost never goes blank when the router serves a new model.
 
 ## How it's tracked (the gateway policies)
@@ -173,9 +173,10 @@ az containerapp job update -n finops-seeder -g rg-copilot-foundry-poc --trigger-
   it sharpens as the heartbeat accumulates a representative run-rate.
 - **Governance is derived, not a 429 log** — per-user rate-limit attribution isn't in standard
   telemetry, so the governance view infers pressure from token bins vs the 50k TPM limit.
-- **Option A vs B** — queries use the classic `customMetrics` / `customDimensions` schema exposed by
-  the App Insights resource. Option B's workspace-based resource surfaces the same data as
-  `AppMetrics` / `Properties` if you ever point this at it.
+- **Query schema** — the workbook binds to the App Insights **component** and reads the classic
+  `customMetrics` / `customDimensions` schema, which both deployments expose (both are workspace-based).
+  The same rows also appear as `AppMetrics` / `Properties` when you query the linked Log Analytics
+  workspace directly.
 
 ## Teardown
 

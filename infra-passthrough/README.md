@@ -200,19 +200,20 @@ The two rows that change **mechanism** vs Option A are the headline of this opti
 > OpenAI User`), or keep an APIM group-check as belt-and-suspenders. This is a real, concrete
 > trade-off vs Option A's gateway-enforced boundary.
 
-**Query per-user/-model usage** (verified working). This App Insights is **workspace-based**, so the
-metrics land in the Log Analytics `AppMetrics` table (not the classic `customMetrics`):
+**Query per-user/-model usage** — identical to Option A. The App Insights component is workspace-based
+in both options; the classic `customMetrics` schema is exposed when you query the component directly:
 
 ```kusto
-AppMetrics
-| where TimeGenerated > ago(1d)
-| where Name in ('Total Tokens','Prompt Tokens','Completion Tokens')
-| extend oid = tostring(Properties.oid), model = tostring(Properties.model)
-| summarize tokens = sum(Sum), requests = sum(ItemCount) by Name, oid, model
-| order by Name asc
+customMetrics
+| where timestamp > ago(1d)
+| where name in ('Total Tokens','Prompt Tokens','Completion Tokens')
+| extend oid = tostring(customDimensions.oid), model = tostring(customDimensions.model)
+| summarize tokens = sum(valueSum), requests = sum(valueCount) by name, oid, model
 ```
 
-(Run it against the component's workspace, e.g. `az monitor log-analytics query -w <workspace-GUID> --analytics-query "<above>"`. The classic `customMetrics`/`requests` tables stay empty for workspace-based components — that's a query-schema gotcha, not a metering failure.)
+(Run it with `az monitor app-insights query --app appi-copilot-poc-pt -g <rg> --analytics-query "<above>"`.
+The same rows also land in the linked Log Analytics workspace as `AppMetrics` / `Properties`, if you'd
+rather query the workspace directly — e.g. for a SIEM feed.)
 
 **Native audit (the headline benefit):** enable a diagnostic setting on the Foundry account
 (`RequestResponse` category → Log Analytics) and you'll see the **real `copilotuser` oid** on every

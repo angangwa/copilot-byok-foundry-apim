@@ -6,15 +6,18 @@ fleet so the FinOps workbook's per-user analytics light up.
 It POSTs pre-aggregated token metrics to the SAME ingestion endpoint the APIM
 `llm-emit-token-metric` policy uses, with the SAME schema:
   metric name : Total Tokens | Prompt Tokens | Completion Tokens
-  dimensions  : oid, model   (+ developerName + requestedModel, synthetic-only labels)
+  dimensions  : oid, developerName, model   (the real gateway dimensions)
+                + requestedModel             (synthetic-only label; see below)
 so the rows are indistinguishable from real gateway telemetry.
 
 For model-router requests the `model` dimension records the SERVED underlying model
-(e.g. grok-4-1-fast-reasoning, gpt-5.4-mini) — what the response's `model` field reveals —
-and `requestedModel` records "model-router". This lets the dashboard show the routing
-split. NOTE: the live gateway can't do this on the metric (the inbound `llm-emit-token-metric`
-policy only sees the REQUESTED name "model-router"); real routed-model attribution comes
-from the GatewayLlmLogs diagnostic instead. See finops/README.md.
+(e.g. grok-4-1-fast-reasoning, gpt-5.4-mini) — what the response's `model` field reveals.
+The live gateway can't do this on the metric (the inbound `llm-emit-token-metric` policy
+only sees the REQUESTED name "model-router"), so `requestedModel` is a synthetic-only stand-in
+for what the real gateway records as `GatewayLlmLogs.DeploymentName`. Real per-developer
+routed-model attribution comes from joining GatewayLlmLogs to the `copilot-finops` trace
+(see finops/README.md) — and because this seeder bypasses the gateway, the synthetic fleet
+does NOT appear in those join-based "Live routing" widgets.
 
 Constraint (measured on this resource): the ingestion endpoint silently drops
 records whose timestamp is older than ~60 minutes (rows newer than that are

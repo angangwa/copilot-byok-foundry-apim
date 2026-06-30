@@ -4,16 +4,31 @@
   "metadata": {
     "description": "PoC #2 (pass-through): APIM Standard v2 + system-assigned MI. Standard v2 is REQUIRED for outbound VNet integration (Basic v2 can't). Deployed WITHOUT integration here, then attached to snet-apim via `az apim update` in deploy.sh. The MI is created but, unlike PoC #1, is granted NO role on Foundry."
   },
+  "parameters": {
+    "serviceName": {
+      "type": "string",
+      "defaultValue": "apim-copilot-poc-pt",
+      "metadata": { "description": "APIM instance name (global, becomes https://<name>.azure-api.net)." }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    },
+    "publisherEmail": {
+      "type": "string",
+      "defaultValue": "publisher@example.com"
+    }
+  },
   "resources": [
     {
       "type": "Microsoft.ApiManagement/service",
       "apiVersion": "2024-05-01",
-      "name": "apim-copilot-poc-pt",
-      "location": "eastus2",
+      "name": "[parameters('serviceName')]",
+      "location": "[parameters('location')]",
       "sku": { "name": "StandardV2", "capacity": 1 },
       "identity": { "type": "SystemAssigned" },
       "properties": {
-        "publisherEmail": "publisher@example.com",
+        "publisherEmail": "[parameters('publisherEmail')]",
         "publisherName": "Copilot PoC (pass-through)"
       }
     }
@@ -21,11 +36,11 @@
   "outputs": {
     "principalId": {
       "type": "string",
-      "value": "[reference('apim-copilot-poc-pt', '2024-05-01', 'Full').identity.principalId]"
+      "value": "[reference(parameters('serviceName'), '2024-05-01', 'Full').identity.principalId]"
     },
     "gatewayUrl": {
       "type": "string",
-      "value": "[reference('apim-copilot-poc-pt', '2024-05-01').gatewayUrl]"
+      "value": "[reference(parameters('serviceName'), '2024-05-01').gatewayUrl]"
     }
   }
 }

@@ -395,7 +395,7 @@
     {
       "type": 1,
       "content": {
-        "json": "### 🔀 Live routing — real gateway traffic\nThe **only real** routed-model attribution: APIM's *GatewayLlmLogs* diagnostic records the model the router actually served (**Served model**) vs the requested deployment. The synthetic seeder can't write here, so this reflects **genuine** gateway calls only — sparse until real Copilot traffic flows. (Charts above blend real + synthetic.)"
+        "json": "### 🔀 Live routing — real gateway traffic, attributed to the developer\nThe genuine routed-model view. APIM's *GatewayLlmLogs* records the model the router actually **served** (vs the requested deployment), and the inbound *copilot-finops* trace stamps the developer onto the same `CorrelationId` — so the second table joins the two to give **per-developer × served model**. The synthetic seeder POSTs straight to App Insights and can't write these gateway logs, so both tables reflect **real** Copilot traffic only (sparse until traffic flows). The fleet charts above blend real + synthetic."
       },
       "name": "h-live"
     },
@@ -429,6 +429,37 @@
         "title": "Routed model by requested deployment (real traffic · GatewayLlmLogs)"
       },
       "name": "live-routing"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let oidmap = ApiManagementGatewayLogs\n| where isnotempty(tostring(TraceRecords))\n| extend tr = parse_json(tostring(TraceRecords))\n| mv-expand tr\n| where tostring(tr.source) == \"copilot-finops\"\n| project CorrelationId, Developer = tostring(tr.metadata.developerName), oid = tostring(tr.metadata.oid);\nApiManagementGatewayLlmLog\n| where isnotempty(ModelName)\n| summarize Requests=count(), Tokens=sum(TotalTokens) by CorrelationId, ModelName\n| join kind=inner oidmap on CorrelationId\n| summarize Requests=sum(Requests), Tokens=sum(Tokens) by ['Developer']=iff(isempty(Developer), oid, Developer), ['Served model']=ModelName\n| order by Tokens desc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 2592000000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{LAW_RESOURCE_ID}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Tokens",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "green"
+              }
+            }
+          ]
+        },
+        "title": "Per-developer × served model (real traffic · GatewayLlmLogs ⋈ correlation trace)"
+      },
+      "name": "live-routing-by-dev"
     },
     {
       "type": 1,

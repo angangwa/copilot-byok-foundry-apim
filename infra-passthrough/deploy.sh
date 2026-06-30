@@ -112,9 +112,11 @@ az cognitiveservices account create -n "$FOUNDRY" -g "$RG" -l "$LOC" \
 az cognitiveservices account deployment create -n "$FOUNDRY" -g "$RG" \
   --deployment-name gpt-4.1 --model-name gpt-4.1 --model-version 2025-04-14 \
   --model-format OpenAI --sku-name Standard --sku-capacity 50 -o none
+#    model-router sized at 900 (=900k TPM) so it exceeds the per-developer 500k TPM policy limit.
+#    Override ROUTER_CAPACITY if your subscription's model-router quota is constrained.
 az cognitiveservices account deployment create -n "$FOUNDRY" -g "$RG" \
   --deployment-name model-router --model-name model-router --model-version 2025-11-18 \
-  --model-format OpenAI --sku-name GlobalStandard --sku-capacity 50 -o none
+  --model-format OpenAI --sku-name GlobalStandard --sku-capacity "${ROUTER_CAPACITY:-900}" -o none
 az cognitiveservices account deployment create -n "$FOUNDRY" -g "$RG" \
   --deployment-name gpt-5-mini --model-name gpt-5-mini --model-version 2025-08-07 \
   --model-format OpenAI --sku-name GlobalStandard --sku-capacity 50 -o none
@@ -166,10 +168,17 @@ az resource update --ids "$FOUNDRY_ID" \
 
 
 # ============================================================================
-# 5. APPLICATION INSIGHTS — destination for per-user token-usage metrics.
+# 5. MONITORING STORE — ONE Log Analytics workspace backs everything.
+#    A single workspace holds both the App Insights token metrics (per-developer customMetrics)
+#    and the gateway resource logs (served model + the per-developer correlation trace), so the
+#    per-developer served-model join is a single-workspace query. App Insights is linked to it
+#    via --workspace. (See infra/deploy.sh for the full rationale.)
 # ============================================================================
 az extension add -n application-insights -y >/dev/null 2>&1 || true
-az monitor app-insights component create --app appi-copilot-poc-pt -l "$LOC" -g "$RG" --kind web -o none
+az monitor log-analytics workspace create -g "$RG" -n law-copilot-poc-pt -l "$LOC" -o none
+LAW_ID=$(az monitor log-analytics workspace show -g "$RG" -n law-copilot-poc-pt --query id -o tsv)
+az monitor app-insights component create --app appi-copilot-poc-pt -l "$LOC" -g "$RG" --kind web \
+  --workspace "$LAW_ID" -o none
 
 
 # ============================================================================
@@ -181,7 +190,8 @@ az monitor app-insights component create --app appi-copilot-poc-pt -l "$LOC" -g 
 #    subnet via `az apim update` — the doc-verified path for integrate-vnet-outbound.
 #    The MI is created but, unlike PoC #1, is granted NO Foundry role.
 # ============================================================================
-az deployment group create -g "$RG" --name apim-deploy --template-file "$HERE/apim.json" -o none
+az deployment group create -g "$RG" --name apim-deploy --template-file "$HERE/apim.json" \
+  --parameters serviceName="$SVC" location="$LOC" publisherEmail="${PUBLISHER_EMAIL:-publisher@example.com}" -o none
 APIM_MI=$(az apim show -n "$SVC" -g "$RG" --query identity.principalId -o tsv)
 
 SNET_APIM_ID=$(az network vnet subnet show -g "$RG" --vnet-name "$VNET" -n "$SNET_APIM" --query id -o tsv)
@@ -252,22 +262,23 @@ python3 -c "import json;json.dump({'properties':{'loggerId':'$LOGGERID','alwaysL
 az rest --method PUT --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC/apis/foundry/diagnostics/applicationinsights?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body @"$TMP/diag.json" -o none
 
-# 10b/c. ROUTED-MODEL LOGGING (GatewayLlmLogs) — see infra/deploy.sh for the full rationale.
-#    The inbound token metric only records the REQUESTED name (e.g. "model-router"); the SERVED
-#    model is captured by the gateway's generative-AI logs. A Log Analytics workspace + a resource
-#    diagnostic (resource-specific table!) + per-API LLM logging (token+model only, NO bodies => no PII)
-#    populate ApiManagementGatewayLlmLog with DeploymentName + ModelName.
+# 10b/c. ROUTED-MODEL LOGGING + PER-DEVELOPER ATTRIBUTION — see infra/deploy.sh for the full rationale.
+#    The inbound token metric only records the REQUESTED name (e.g. "model-router"); the SERVED model
+#    is captured by the gateway's generative-AI logs. Two categories route to the workspace from step 5:
+#      * GatewayLlmLogs -> ApiManagementGatewayLlmLog: DeploymentName + ModelName + tokens, per request.
+#      * GatewayLogs    -> ApiManagementGatewayLogs:   TraceRecords carrying the inbound 'copilot-finops'
+#        trace (developer oid) on the SAME CorrelationId.
+#    Joining the two on CorrelationId yields per-developer x served-model. Token+model only, NO bodies => no PII.
 APIM_RES="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC"
-az monitor log-analytics workspace create -g "$RG" -n law-copilot-poc -l "$LOC" -o none
-LAW_ID=$(az monitor log-analytics workspace show -g "$RG" -n law-copilot-poc --query id -o tsv)
 # --export-to-resource-specific true is REQUIRED (else data goes to legacy AzureDiagnostics, not the
 # resource-specific table, and the dashboard widget stays empty). First rows appear ~15 min later.
 az monitor diagnostic-settings create --name apim-llm-logs --resource "$APIM_RES" \
   --workspace "$LAW_ID" --export-to-resource-specific true \
-  --logs '[{"category":"GatewayLlmLogs","enabled":true}]' -o none
+  --logs '[{"category":"GatewayLlmLogs","enabled":true},{"category":"GatewayLogs","enabled":true}]' -o none
 az rest --method PUT --url "https://management.azure.com$APIM_RES/loggers/azuremonitor?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body '{"properties":{"loggerType":"azureMonitor"}}' -o none
-python3 -c "import json;json.dump({'properties':{'loggerId':'$APIM_RES/loggers/azuremonitor','largeLanguageModel':{'logs':'enabled'}}},open('$TMP/llmdiag.json','w'))"
+# verbosity=information makes the gateway emit the inbound 'copilot-finops' trace into GatewayLogs.
+python3 -c "import json;json.dump({'properties':{'loggerId':'$APIM_RES/loggers/azuremonitor','verbosity':'information','largeLanguageModel':{'logs':'enabled'}}},open('$TMP/llmdiag.json','w'))"
 az rest --method PUT --url "https://management.azure.com$APIM_RES/apis/foundry/diagnostics/azuremonitor?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body @"$TMP/llmdiag.json" -o none
 

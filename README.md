@@ -13,7 +13,8 @@ This repo contains **two working implementations**. They are identical except fo
 decision**: at the gateway, does APIM call Foundry with **its own managed identity**, or does it
 **pass the developer's token straight through**?
 
-> **Identical in both** (so not a basis for choosing): APIM validates the Entra token, applies the per-user **TPM limit** and per-`oid`/`model` **metering**, and can apply per-model request policy. The differences are entirely in the **authorization** and **backend-call** mechanics described below.
+> Identical in both: APIM validates the Entra token, applies the per-user TPM limit and per-`oid`/`model`
+> metering. The differences are entirely in the authorization and backend-call mechanics below.
 
 ---
 
@@ -62,8 +63,7 @@ stopped by the **network** (Foundry is private; its endpoint is reachable only f
 ## Option A — APIM managed-identity swap
 
 APIM **drops** the developer's token and calls Foundry with **its own managed identity**. Only APIM's
-identity has a role on Foundry, so **identity** (not the network) makes the gateway non-bypassable —
-which lets Foundry stay **public**.
+identity has a role on Foundry, so **identity** (not the network) makes the gateway non-bypassable.
 
 ```mermaid
 flowchart TB
@@ -119,11 +119,10 @@ Each folder is a self-contained, reproducible deploy with its own README, `deplo
 
 ## FinOps dashboard
 
-Both options already emit per-developer token metrics (`oid` + `model`) to Application Insights.
-[`finops/`](finops/README.md) turns those into an **Azure Monitor Workbook** that surfaces the usage
-pattern that defines coding-agent spend at scale — **a small share of developers drives most of the
-cost** (Pareto concentration, top-N leaderboards, model mix, per-developer chargeback drill-down,
-budget/forecast). No gateway changes required.
+Both options emit per-developer token metrics (`oid` + `model`) to Application Insights.
+[`finops/`](finops/README.md) turns those into an Azure Monitor Workbook that surfaces the usage pattern
+defining coding-agent spend at scale — a small share of developers drives most of the cost (Pareto
+concentration, top-N leaderboards, model mix, per-developer chargeback drill-down, budget/forecast).
 
 ```bash
 python3 finops/seed-usage.py     # populate a synthetic developer fleet for the demo

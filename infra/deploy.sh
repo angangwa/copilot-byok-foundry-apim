@@ -92,10 +92,13 @@ az cognitiveservices account deployment create -n "$FOUNDRY" -g "$RG" \
 #    You can add MORE models the same way — each gets a deployment NAME the client
 #    selects via the request body's "model" field. No APIM change needed (one
 #    operation carries any model). Example: the "model router", a single model
-#    that auto-picks the best underlying model per prompt.
+#    that auto-picks the best underlying model per prompt. Sized at 900 (=900k TPM)
+#    so it comfortably exceeds the per-developer 500k TPM policy limit — the backend
+#    deployment capacity stays the real ceiling for hands-on model-router testing.
+#    Override ROUTER_CAPACITY if your subscription's model-router quota is constrained.
 az cognitiveservices account deployment create -n "$FOUNDRY" -g "$RG" \
   --deployment-name model-router --model-name model-router --model-version 2025-11-18 \
-  --model-format OpenAI --sku-name GlobalStandard --sku-capacity 50 -o none
+  --model-format OpenAI --sku-name GlobalStandard --sku-capacity "${ROUTER_CAPACITY:-900}" -o none
 
 #    A reasoning model (gpt-5-mini) — needed for the GitHub Copilot CLI's Responses wire-api,
 #    which runs stateless and requires reasoning.encrypted_content (non-reasoning models like
@@ -119,11 +122,20 @@ az rest --method PUT \
 
 
 # ============================================================================
-# 3. APPLICATION INSIGHTS — where APIM will send per-user token-usage metrics.
+# 3. MONITORING STORE — ONE Log Analytics workspace backs everything.
+#    ------------------------------------------------------------------------
+#    A single workspace holds BOTH signals the FinOps dashboard reads:
+#      * App Insights token metrics (per-developer customMetrics), and
+#      * the gateway resource logs (served model + the per-developer correlation trace).
+#    Creating the workspace first and linking App Insights to it (--workspace) keeps every
+#    signal co-located, so the per-developer served-model join is a single-workspace query.
 #    (Needs the application-insights CLI extension; install it quietly if absent.)
 # ============================================================================
 az extension add -n application-insights -y >/dev/null 2>&1 || true
-az monitor app-insights component create --app appi-copilot-poc -l "$LOC" -g "$RG" --kind web -o none
+az monitor log-analytics workspace create -g "$RG" -n law-copilot-poc -l "$LOC" -o none
+LAW_ID=$(az monitor log-analytics workspace show -g "$RG" -n law-copilot-poc --query id -o tsv)
+az monitor app-insights component create --app appi-copilot-poc -l "$LOC" -g "$RG" --kind web \
+  --workspace "$LAW_ID" -o none
 
 
 # ============================================================================
@@ -138,7 +150,8 @@ az monitor app-insights component create --app appi-copilot-poc -l "$LOC" -g "$R
 #    We grab its principalId (object ID) — we'll grant it access in steps 5 & 6.
 #    Provisioning takes a few minutes (v2 is much faster than classic APIM).
 # ============================================================================
-az deployment group create -g "$RG" --name apim-deploy --template-file "$HERE/apim.json" -o none
+az deployment group create -g "$RG" --name apim-deploy --template-file "$HERE/apim.json" \
+  --parameters serviceName="$SVC" location="$LOC" publisherEmail="${PUBLISHER_EMAIL:-publisher@example.com}" -o none
 APIM_MI=$(az apim show -n "$SVC" -g "$RG" --query identity.principalId -o tsv)
 
 
@@ -253,30 +266,33 @@ az rest --method PUT --url "https://management.azure.com/subscriptions/$SUB/reso
 #    The token METRIC above (llm-emit-token-metric, step 10/(3)) runs INBOUND, so its
 #    `model` dimension is always the REQUESTED name. For model-router that is literally
 #    "model-router" — it CAN'T see which underlying model actually served the request
-#    (that's only in the response). To record the SERVED model, turn on the gateway's
-#    generative-AI logs: a Log Analytics workspace + a resource diagnostic that routes the
-#    GatewayLlmLogs category there. The resource-specific table ApiManagementGatewayLlmLog
-#    then carries DeploymentName (= model-router) next to ModelName (= e.g. gpt-5-nano-...),
-#    which the FinOps "Live routing" widget reads (see finops/README.md).
-#    OPTIONAL: the per-developer dashboard runs purely on the App Insights token metric
-#    above; only the routed-model view needs these logs.
+#    (that's only in the response, which streams — so it can't be buffered and read here).
+#    To record the SERVED model AND tie it back to the developer, route two gateway log
+#    categories to the workspace created in step 3:
+#      * GatewayLlmLogs -> ApiManagementGatewayLlmLog: DeploymentName (= model-router) next to
+#        ModelName (= e.g. gpt-5-nano-...) + token counts, per request, keyed by CorrelationId.
+#      * GatewayLogs    -> ApiManagementGatewayLogs: carries TraceRecords, where the inbound
+#        'copilot-finops' trace writes the developer oid on the SAME CorrelationId.
+#    Joining the two on CorrelationId yields per-developer x served-model (the FinOps "Live
+#    routing" widgets; see finops/README.md). The per-developer token dashboard also runs on the
+#    App Insights metric above — in the same workspace.
 APIM_RES="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$SVC"
-az monitor log-analytics workspace create -g "$RG" -n law-copilot-poc -l "$LOC" -o none
-LAW_ID=$(az monitor log-analytics workspace show -g "$RG" -n law-copilot-poc --query id -o tsv)
 #    --export-to-resource-specific true is REQUIRED. Without it the data lands in the legacy
 #    AzureDiagnostics table (as deploymentName_s / modelName_s columns) instead of the
 #    ApiManagementGatewayLlmLog table, and the dashboard widget stays empty. First rows
 #    appear ~15 min after enabling (a brand-new workspace can take up to ~2h).
 az monitor diagnostic-settings create --name apim-llm-logs --resource "$APIM_RES" \
   --workspace "$LAW_ID" --export-to-resource-specific true \
-  --logs '[{"category":"GatewayLlmLogs","enabled":true}]' -o none
+  --logs '[{"category":"GatewayLlmLogs","enabled":true},{"category":"GatewayLogs","enabled":true}]' -o none
 
 # 9d. Enable LLM logging on the foundry API via APIM's built-in azureMonitor logger.
 #    largeLanguageModel.logs=enabled => token usage + SERVED model name ONLY. We deliberately
 #    omit "requests"/"responses" so prompt/completion BODIES are NOT logged (no PII, low cost).
+#    verbosity=information makes the gateway emit the inbound 'copilot-finops' trace (severity
+#    information) into ApiManagementGatewayLogs.TraceRecords, which carries the developer oid.
 az rest --method PUT --url "https://management.azure.com$APIM_RES/loggers/azuremonitor?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body '{"properties":{"loggerType":"azureMonitor"}}' -o none
-python3 -c "import json;json.dump({'properties':{'loggerId':'$APIM_RES/loggers/azuremonitor','largeLanguageModel':{'logs':'enabled'}}},open('$TMP/llmdiag.json','w'))"
+python3 -c "import json;json.dump({'properties':{'loggerId':'$APIM_RES/loggers/azuremonitor','verbosity':'information','largeLanguageModel':{'logs':'enabled'}}},open('$TMP/llmdiag.json','w'))"
 az rest --method PUT --url "https://management.azure.com$APIM_RES/apis/foundry/diagnostics/azuremonitor?api-version=2024-05-01" \
   --headers "Content-Type=application/json" --body @"$TMP/llmdiag.json" -o none
 

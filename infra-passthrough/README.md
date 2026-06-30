@@ -109,16 +109,11 @@ sequenceDiagram
 
 ### Note: the APIM gateway can be private too
 
-This PoC exposes APIM on its **public** gateway endpoint — the simplest setup for laptops and BYOK
-clients, and the public surface is still fully governed (validate → limit/meter → RBAC → private
-backend). But the gateway is **not required** to be public. For an enterprise that wants the gateway
-reachable **only from the corporate network**, APIM can be locked down without changing anything
-downstream:
-
-- **Standard v2** — add an **inbound private endpoint** to APIM and set its `publicNetworkAccess =
-  Disabled`; clients reach it over VPN/ExpressRoute. (Outbound VNet integration to Foundry is
-  unchanged.)
-- **Premium v2** — use **VNet injection** for fully private inbound **and** outbound in one resource.
+This PoC exposes APIM on its public endpoint (simplest for laptops/BYOK), still fully governed. To make
+the gateway reachable only from the corporate network, lock it down without touching anything downstream:
+Standard v2 adds an inbound private endpoint with `publicNetworkAccess=Disabled` (clients reach it over
+VPN/ExpressRoute); Premium v2 uses VNet injection for fully private inbound and outbound. Everything else
+(pass-through token, group RBAC, private Foundry, metering) is identical.
 
 ```mermaid
 flowchart LR
@@ -129,15 +124,13 @@ flowchart LR
     APIM2 -->|"outbound VNet integration"| F2["🤖 Foundry (private)"]
 ```
 
-Everything else in this PoC (pass-through token, group RBAC, private Foundry, metering) is identical;
-only APIM's *inbound* exposure changes.
-
 ---
 
 ## What it governs (unchanged from Option A)
 
-- **Per-user rate limit** — `llm-token-limit` keyed on the Entra `oid` (50k TPM/user) → 429.
-- **Per-user/-model metering** — `llm-emit-token-metric` to App Insights (`appi-copilot-poc-pt`).
+- **Per-user rate limit** — `llm-token-limit` keyed on the Entra `oid` (500k TPM/user) → 429.
+- **Per-user/-model metering** — `llm-emit-token-metric` to App Insights (`appi-copilot-poc-pt`), plus the
+  `copilot-finops` correlation trace so `GatewayLlmLogs`' served model joins back to the developer.
 - **Authentication** — `validate-azure-ad-token` (tenant + `cognitiveservices` audience) → 401.
 - **Authorization** — now native: RBAC on the group → 403 from Foundry for non-members.
 
@@ -187,21 +180,18 @@ bash infra-passthrough/test-gateway.sh   # device-code sign-in as copilotuser wh
 | Exceed per-user TPM | **429** | APIM `llm-token-limit` |
 | Per-user metering | metrics by `oid`/`model` in `appi-copilot-poc-pt` | APIM `llm-emit-token-metric` |
 
-The two rows that change **mechanism** vs Option A are the headline of this option: authorization is now
-**Foundry RBAC** (not an APIM Graph check), and bypass is blocked by **network** (not identity/401).
+Versus Option A, two mechanisms change: authorization is now Foundry RBAC (not an APIM Graph check), and
+bypass is blocked by network (not identity/401).
 
-> ⚠️ **Authorization is the *union* of all Azure RBAC that grants Foundry data-plane access — including
-> inherited assignments.** A principal that is **not** in `copilot-users` but holds a subscription-scoped
-> **`Foundry User`** role still gets `200`, because that role inherits down to the account. In Option A
-> the APIM Graph group-check is the *sole* gate and would block it; here, anyone with a broadly-scoped or
-> inherited data-plane role gets in regardless of group membership.
-> **Consequence for least-privilege:** to make group membership the *effective* boundary, audit and
-> remove broader data-plane assignments (subscription/MG-level `Foundry User` / `Cognitive Services
-> OpenAI User`), or keep an APIM group-check as belt-and-suspenders. This is a real, concrete
-> trade-off vs Option A's gateway-enforced boundary.
+> ⚠️ **Authorization is the union of all Azure RBAC that grants Foundry data-plane access, including
+> inherited assignments.** A principal not in `copilot-users` but holding a subscription-scoped `Foundry
+> User` role still gets `200`, because it inherits down to the account (the ⚠️ row above). Option A's Graph
+> check would block it. To make group membership the effective boundary, remove broader data-plane
+> assignments, or keep an APIM group-check as belt-and-suspenders — a real trade-off vs Option A.
 
-**Query per-user/-model usage** — identical to Option A. The App Insights component is workspace-based
-in both options; the classic `customMetrics` schema is exposed when you query the component directly:
+**Query per-user/-model usage** — identical to Option A. App Insights is workspace-based and **linked to
+the same Log Analytics workspace** (`law-copilot-poc-pt`) as the gateway logs, so the token metrics and the
+served-model logs are queryable together. The classic `customMetrics` schema is exposed via the component:
 
 ```kusto
 customMetrics
@@ -212,8 +202,9 @@ customMetrics
 ```
 
 (Run it with `az monitor app-insights query --app appi-copilot-poc-pt -g <rg> --analytics-query "<above>"`.
-The same rows also land in the linked Log Analytics workspace as `AppMetrics` / `Properties`, if you'd
-rather query the workspace directly — e.g. for a SIEM feed.)
+The same rows also appear as `AppMetrics` / `Properties` in the workspace. For per-developer × **served**
+model on real traffic, join `ApiManagementGatewayLlmLog` to the `copilot-finops` trace in
+`ApiManagementGatewayLogs` on `CorrelationId` — see `finops/README.md`.)
 
 **Native audit (the headline benefit):** enable a diagnostic setting on the Foundry account
 (`RequestResponse` category → Log Analytics) and you'll see the **real `copilotuser` oid** on every

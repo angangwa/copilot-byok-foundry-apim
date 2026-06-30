@@ -27,16 +27,14 @@ can't point their client straight at Foundry.
 
 ## The core idea: two identities, two tokens
 
-This is the one concept that makes everything else click:
-
 | Token | Minted by | Audience | Used for |
 |---|---|---|---|
-| **Developer token** | the laptop (`az login` / VS Code sign-in) | `https://cognitiveservices.azure.com` | APIM uses it to answer *"who is this, and are they allowed?"* |
-| **APIM managed-identity token** | Azure, for APIM | Foundry / Microsoft Graph | What actually **calls Foundry** (and reads group membership) |
+| Developer token | the laptop (`az login` / VS Code sign-in) | `https://cognitiveservices.azure.com` | APIM answers *"who is this, and are they allowed?"* |
+| APIM managed-identity token | Azure, for APIM | Foundry / Microsoft Graph | what actually calls Foundry (and reads group membership) |
 
-APIM validates the developer's token, then **discards it** and substitutes its own to call the
-backend. Developers have **no RBAC role on Foundry** — only APIM does — which is what forces every
-request through the gateway.
+APIM validates the developer's token, then discards it and substitutes its own to call the backend.
+Developers have no RBAC role on Foundry — only APIM does — which is what forces every request through the
+gateway.
 
 ---
 
@@ -47,13 +45,13 @@ flowchart TB
     Dev["👩‍💻 Developer<br/>VS Code Copilot (keyless BYOK)"]
     Entra["🔑 Microsoft Entra ID<br/>(issues tokens, holds the group)"]
     Graph["📇 Microsoft Graph"]
-    AppI["📊 Application Insights<br/>(per-user token metrics)"]
+    AppI["📊 One Log Analytics workspace<br/>App Insights token metrics + gateway served-model logs"]
 
     subgraph APIM["🛡️ Azure API Management — Basic v2 (system-assigned managed identity)"]
         direction TB
         P1["1 · validate-azure-ad-token<br/>tenant + aud=cognitiveservices → else 401"]
         P2["2 · group check via Graph<br/>list group members, filter by oid (cached 1h) → else 403"]
-        P3["3 · llm-token-limit + emit-token-metric<br/>keyed on developer oid → else 429"]
+        P3["3 · llm-token-limit + emit-token-metric + copilot-finops trace<br/>keyed on developer oid → else 429"]
         P4["4 · swap to APIM's MI token<br/>set Authorization, forward"]
         P1 --> P2 --> P3 --> P4
     end
@@ -220,23 +218,22 @@ add `-y` to skip the confirmation prompt).
 
 ## Adding models, the model router, and the Responses API
 
-The gateway is **model-agnostic** — one APIM operation carries any model (the client picks via the
-request body's `model` field), and the policy keys on the *user*, not the model. So:
+The gateway is model-agnostic — one APIM operation carries any model (the client picks via the request
+body's `model` field), and the policy keys on the *user*, not the model. So:
 
-- **More models** — deploy another model in the same Foundry account; it flows through the same
-  governed gateway with **zero APIM changes**. Just add a VS Code entry with the new deployment name.
-- **Model router** (`model-router`, deployed here) — a single deployment that **auto-selects the best
-  underlying model per prompt** (Balanced/Quality/Cost modes). Call it with `"model": "model-router"`;
-  each response's `model` field reveals which model actually answered (we've seen `gpt-5-nano`,
-  `gpt-5-mini`, `gpt-5.4-mini`, `gpt-oss-120b`, …).
+- **More models** — deploy another model in the same Foundry account; it flows through the same gateway
+  with no APIM changes. Just add a VS Code entry with the new deployment name.
+- **Model router** (`model-router`, deployed here) — a single deployment that auto-selects the underlying
+  model per prompt. Call it with `"model": "model-router"`; each response's `model` field reveals which
+  model actually answered (we've seen `gpt-5-nano`, `gpt-5-mini`, `gpt-5.4-mini`, `gpt-oss-120b`, …).
 - **Responses API** — exposed at `/foundry/openai/v1/responses` (same gate applies). For the VS Code
   `azure` vendor, Responses is cleanest via the Copilot CLI/SDK `wire_api: responses` or a custom
   endpoint; plain chat uses `/chat/completions`.
 
 ### ⚠️ The model-router endpoint split (and how the gateway absorbs it)
 
-model-router serves its **two APIs on two different Azure endpoints** — verified empirically *and*
-reproduced with Microsoft's own SDK (`AIProjectClient.get_openai_client()`):
+model-router serves its two APIs on two different Azure endpoints (verified, and matching Microsoft's own
+SDK `AIProjectClient.get_openai_client()`):
 
 | model-router via… | `/chat/completions` | `/responses` |
 |---|---|---|
@@ -255,20 +252,21 @@ Responses through the one governed endpoint (validated: all four combos return 2
 **Foundry project** (`copilot-proj`, created by `deploy.sh`) and the APIM MI to hold **Cognitive
 Services User** (for the project/`ai.azure.com` hop) in addition to **Cognitive Services OpenAI User**.
 
-Per-request metering carries a **`model` dimension** so you can break usage down by model in App
-Insights (and by `oid` for per-developer chargeback).
+Per-request metering carries a `model` dimension for per-model breakdowns (and `oid` for per-developer
+chargeback). For `model-router` that dimension is the *requested* name; the served model is captured by
+the `GatewayLlmLogs` diagnostic and tied to the developer by the inbound `copilot-finops` trace (same
+`CorrelationId`), so the FinOps dashboard attributes the routed model per developer. App Insights and the
+gateway logs share one workspace (`law-copilot-poc`); see `finops/README.md`.
 
 ## Using the GitHub Copilot CLI (BYOK)
 
-The [Copilot CLI](https://docs.github.com/copilot) (`npm i -g @github/copilot`) drives the governed
-gateway in **BYOK mode** — and notably **no GitHub login is required** in that mode. It's env-var
-driven (`infra/copilot-cli.env.sh`).
+The [Copilot CLI](https://docs.github.com/copilot) (`npm i -g @github/copilot`) drives the gateway in BYOK
+mode — no GitHub login required. It's env-var driven (`infra/copilot-cli.env.sh`).
 
-### Keyless (recommended)
-
-Use the **`azure`** provider type with **no token set** — the CLI acquires the Entra token itself via
-`DefaultAzureCredential`. The developer just signs into `az` as a `copilot-users` member (or runs under
-a managed identity / service principal); there's nothing to paste or refresh.
+**Keyless (recommended).** Use the `azure` provider with no token set — the CLI acquires the Entra token
+itself via `DefaultAzureCredential` (scope `https://cognitiveservices.azure.com/.default`, exactly our
+gateway's audience), picking up `az login`, a managed identity, or a service principal. Nothing to paste
+or refresh.
 
 ```bash
 az login   # as a copilot-users member
@@ -279,54 +277,21 @@ export COPILOT_MODEL="model-router"     # or gpt-4.1
 copilot -p "explain this repo" --allow-all-tools
 ```
 
-`DefaultAzureCredential` mints a token for scope `https://cognitiveservices.azure.com/.default` — exactly
-the audience our gateway validates — picking up `az login`, a managed identity, or
-`AZURE_CLIENT_ID/TENANT_ID/CLIENT_SECRET`. Same mechanism as the
-[Copilot SDK Azure managed-identity guide](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/azure-managed-identity),
-and it sidesteps the static-token chore of a pasted bearer.
+> ⚠️ Leave `COPILOT_PROVIDER_AZURE_API_VERSION` unset — setting it flips the CLI to the classic
+> `…/deployments/<name>/…?api-version=…` format, which doesn't match our `/openai/v1/*` route → `404`.
 
-> ⚠️ Leave `COPILOT_PROVIDER_AZURE_API_VERSION` **unset**. Setting it flips the CLI to the classic
-> `…/openai/deployments/<name>/…?api-version=…` wire format, which doesn't match our `/openai/v1/*`
-> route → **`404`**. Unset, it calls our base URL as-is (versionless v1).
+**Pasted bearer (any client).** The gateway is an OpenAI-compatible endpoint behind `Authorization: Bearer
+<token>`, so any client that sets a base URL + bearer works. Mint a token as a copilot-users member
+(`az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv`);
+for the CLI that's `COPILOT_PROVIDER_TYPE="openai"` + `COPILOT_PROVIDER_BEARER_TOKEN`. It expires in
+~60–90 min and doesn't refresh, so prefer the keyless path. Either way an out-of-group token gets `403`,
+identical to VS Code.
 
-### Pasted bearer token (any client)
-
-The gateway is just an **OpenAI-compatible endpoint behind `Authorization: Bearer <token>`**, so it
-needs no native `azure` provider — **any** client that lets you set a base URL + bearer token works.
-Mint a token as a `copilot-users` member:
-
-```bash
-az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv
-```
-
-For the Copilot CLI that's `COPILOT_PROVIDER_TYPE="openai"` + `COPILOT_PROVIDER_BEARER_TOKEN`. A pasted
-token expires in ~60–90 min and doesn't auto-refresh — re-export it, or use the keyless path above.
-
-```bash
-export COPILOT_PROVIDER_TYPE="openai"
-export COPILOT_PROVIDER_BEARER_TOKEN="$(az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv)"
-```
-
-Both provider types work: `gpt-4.1` **and** `model-router` return governed completions, and an
-**out-of-group** token is rejected with **`403`** at the CLI — the CLI is governed identically to VS Code.
-
-### Picking the wire-api (`COPILOT_PROVIDER_WIRE_API`)
-
-`completions` is the universal default — it works for every model and is what the examples above use.
-Only reach for `responses` with a **reasoning** model (e.g. `gpt-5-mini`): the CLI's `responses` agent
-loop sends reasoning parameters (`reasoning.encrypted_content`, `reasoning.effort`) that non-reasoning
-models reject, so **`gpt-4.1` and `model-router` must stay on `completions`** (model-router returns
-`400 Encrypted content is not supported`). There's no CLI flag to change this — adjustable BYOK reasoning
-effort is an [open request](https://github.com/github/copilot-cli/issues/2559).
-
-This is a **client** constraint, not the gateway: APIM serves `/responses` for any model — a direct curl
-to `gpt-4.1` returns `200`:
-
-```bash
-curl -s https://apim-copilot-poc.azure-api.net/foundry/openai/v1/responses \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"model":"gpt-4.1","input":"Reply with exactly: CURL-OK"}'      # -> 200, output_text: "CURL-OK"
-```
+**Wire API.** `completions` is the universal default (every model). Use `responses` only with a reasoning
+model (e.g. `gpt-5-mini`) — its agent loop sends reasoning params (`reasoning.encrypted_content`) that
+non-reasoning models reject, so `gpt-4.1` and `model-router` must stay on `completions`. That's a client
+constraint, not the gateway (APIM serves `/responses` for any model;
+[open CLI request](https://github.com/github/copilot-cli/issues/2559)).
 
 ## Validation
 

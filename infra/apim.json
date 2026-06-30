@@ -1,16 +1,31 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
+  "parameters": {
+    "serviceName": {
+      "type": "string",
+      "defaultValue": "apim-copilot-poc",
+      "metadata": { "description": "APIM instance name (global, becomes https://<name>.azure-api.net)." }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    },
+    "publisherEmail": {
+      "type": "string",
+      "defaultValue": "publisher@example.com"
+    }
+  },
   "resources": [
     {
       "type": "Microsoft.ApiManagement/service",
       "apiVersion": "2024-05-01",
-      "name": "apim-copilot-poc",
-      "location": "eastus2",
+      "name": "[parameters('serviceName')]",
+      "location": "[parameters('location')]",
       "sku": { "name": "BasicV2", "capacity": 1 },
       "identity": { "type": "SystemAssigned" },
       "properties": {
-        "publisherEmail": "publisher@example.com",
+        "publisherEmail": "[parameters('publisherEmail')]",
         "publisherName": "Copilot PoC"
       }
     }
@@ -18,11 +33,11 @@
   "outputs": {
     "principalId": {
       "type": "string",
-      "value": "[reference('apim-copilot-poc', '2024-05-01', 'Full').identity.principalId]"
+      "value": "[reference(parameters('serviceName'), '2024-05-01', 'Full').identity.principalId]"
     },
     "gatewayUrl": {
       "type": "string",
-      "value": "[reference('apim-copilot-poc', '2024-05-01').gatewayUrl]"
+      "value": "[reference(parameters('serviceName'), '2024-05-01').gatewayUrl]"
     }
   }
 }
